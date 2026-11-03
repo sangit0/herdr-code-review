@@ -44,9 +44,9 @@ export function commentGutter(t, count, stale, selected) {
     .rounded(4).cursor_pointer().hover(style => style.bg(t.selected).text_color(t.accent))
     .when(count > 0 || selected, element => element.text_color(color))
     .when(count > 0, element => element.bg(color + "38"))
-    .child(count ? h_flex().gap(1).items_center()
-      .child(icon("comment", 11))
-      .when(count > 1, e => e.child(div().text_size(9).child(count > 9 ? "9+" : String(count)))) : "+");
+    .child(count ? h_flex().items_center()
+      .child(icon("comment", count === 1 ? 16 : count > 9 ? 12 : 15))
+      .when(count > 1, e => e.child(div().text_size(8).child(count > 9 ? "9+" : String(count)))) : "+");
 }
 
 export function inCommentGutter(x, start) {

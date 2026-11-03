@@ -3,6 +3,7 @@ import { View, div } from 'gpui-kit';
 import { v_flex, h_flex, TextareaState, Textarea } from 'gpui-base';
 import { spaces, agents, shared, setShared, theme, hc } from 'herdr';
 import { makeComment, forSource, forLine, sendAndRemove, isOutdated, lineLabel } from './comment-model.js';
+import { icon } from './ui.js';
 
 const KEY = 'tabbed-changes.comments.v1';
 const allNotes = () => shared(KEY) ?? [];
@@ -14,14 +15,30 @@ export const sendSavedComment = (note, target, space) =>
   sendAndRemove({ note, target, space, agents: agents(), send: args => hc(args), read: allNotes, write: next => setShared(KEY, next) });
 // The virtual row reserves the same space before and after saving.
 export const INLINE_COMMENT_HEIGHT = 220;
-export const commentButton = (id, text, t, action, { active = false, enabled = true } = {}) =>
-  div().id(id).flex_none().px(8).py(3).rounded(4).text_size(11)
-    .bg(active && enabled ? t.selected : t.raised)
-    .text_color(enabled ? (active ? t.accent : t.foreground) : t.dim)
-    .when(enabled, e => e.cursor_pointer().hover(s => s.bg(t.hover))
+export const commentButton = (id, text, t, action, { active = false, primary = false, enabled = true } = {}) =>
+  div().id(id).flex_none().h(26).px(9).flex().items_center().rounded(5).text_size(11).font_semibold()
+    .bg(primary && enabled ? t.accent : active && enabled ? t.accent + '24' : t.surface)
+    .border(1).border_color((primary || active) && enabled ? t.accent : t.border)
+    .text_color(enabled ? (primary ? t.accent_foreground : active ? t.accent : t.foreground) : t.muted)
+    .when(enabled, e => e.cursor_pointer().hover(s => primary ? s.opacity(0.88) : s.bg(t.hover))
       .on_mouse_down('left', (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => { cx.stop_propagation(); action(cx); }))
     .child(text);
+
+export const commentBadge = t => div().size(30).flex_none().flex().items_center().justify_center()
+  .rounded(7).bg(t.accent + '24').child(icon('comment', 16).text_color(t.accent));
+
+export const savedCommentCard = t => v_flex().w_full().flex_none().min_w(0).px(10).py(7).gap(6)
+  .rounded(6).bg(t.raised).border(1).border_color(t.border);
+
+export function commentAgentPicker(t, { id, agents, target, enabled, select }) {
+  return div().id(id).flex_1().min_w(0).h(28).overflow_x_scrollbar()
+    .child(h_flex().h_full().gap(5).items_center()
+      .child(div().flex_none().text_size(11).text_color(t.muted).child(agents.length ? 'Send to' : 'No idle agent available'))
+      .children(agents.map(agent => commentButton(`${id}-${agent.address}`,
+        `${target === agent.address ? '✓ ' : ''}${agent.program?.name ?? agent.app ?? 'Agent'} · ${agent.address}`, t,
+        cx => select(agent.address, cx), { active: target === agent.address, enabled }))));
+}
 
 export class InlineComments extends View {
   init(p, cx) {
@@ -80,59 +97,60 @@ export class InlineComments extends View {
   }
   composer(t) {
     return v_flex().flex_1().min_h(0).gap(6)
-      .child(div().text_size(11).font_semibold().text_color(t.muted).child('New comment'))
-      .child(div().h(62).flex_none().px(7).py(4).bg(t.background).border(1).border_color(t.input).rounded(4)
-        .child(Textarea.new(this.input).w_full().text_size(12)))
+      .child(div().h(66).flex_none().px(9).py(5).bg(t.background).border(1).border_color(t.input).rounded(6)
+        .child(Textarea.new(this.input).w_full().text_size(13)))
       .child(h_flex().justify_end()
         .child(commentButton('line-comment-save', 'Save comment', t, cx => this.save(cx),
-          { active: true, enabled: Boolean(this.input.value().trim()) && !this.busy })));
+          { primary: true, enabled: Boolean(this.input.value().trim()) && !this.busy })));
   }
   saved(t, notes) {
     const idle = idleCommentAgents(this.space);
     const canSend = !this.busy && idle.some(a => a.address === this.target);
-    const agentHint = !idle.length ? 'No idle agent available in this space' : 'Choose an idle agent to send';
     return v_flex().flex_1().min_h(0).gap(6)
-      .child(div().text_size(11).font_semibold().text_color(t.muted).child(`Saved comments (${notes.length})`))
+      .child(h_flex().h(28).flex_none().gap(10).items_center()
+        .child(div().flex_none().text_size(11).font_semibold().text_color(t.foreground).child(`Saved comments (${notes.length})`))
+        .when(notes.length > 0, e => e.child(commentAgentPicker(t, {
+          id: 'line-agents', agents: idle, target: this.target, enabled: !this.busy,
+          select: (address, cx) => { this.target = address; cx.notify(); },
+        }))))
       .when(!notes.length, e => e.child(div().flex_1().text_color(t.dim).child('No saved comments on this line.')))
-      .when(notes.length > 0, e => e
-        .child(v_flex().id('line-thread').flex_1().min_h(0).gap(6).overflow_y_scrollbar()
-          .children(notes.map(note => this.savedNote(t, note, canSend))))
-        .child(div().id('line-agents').h(24).flex_none().min_w(0).overflow_x_scrollbar()
-          .child(idle.length ? h_flex().gap(5).items_center()
-            .child(div().flex_none().text_size(11).text_color(t.dim).child(agentHint))
-            .children(idle.map(a =>
-            commentButton(`line-agent-${a.address}`, `${a.program?.name ?? a.app ?? 'Agent'} · ${a.address}`, t,
-              cx => { this.target = a.address; cx.notify(); }, { active: this.target === a.address, enabled: !this.busy })))
-            : div().text_size(11).text_color(t.dim).truncate().child(agentHint))));
+      .when(notes.length > 0, e => e.child(v_flex().id('line-thread').flex_1().min_h(0).gap(6).overflow_y_scrollbar()
+        .children(notes.map(note => this.savedNote(t, note, canSend)))));
   }
   savedNote(t, note, canSend) {
-    return v_flex().flex_none().min_w(0).px(8).py(5).gap(4).rounded(4).bg(t.raised)
+    return savedCommentCard(t)
       .when(isOutdated(note, this.references), e => e.child(div().text_size(10).text_color(t.ansi3).child('Outdated · code changed since this comment')))
-      .child(div().w_full().min_w(0).whitespace_normal().child(note.text))
-      .child(h_flex().gap(6).items_center()
-        .child(note.sentAt ? div().text_size(10).text_color(t.ansi2).child(`Sent to ${note.sentTo}`) :
-          commentButton(`line-send-${note.id}`, 'Send to agent', t, cx => this.send(note, cx), { active: true, enabled: canSend }))
+      .child(div().w_full().min_w(0).text_size(13).whitespace_normal().child(note.text))
+      .child(h_flex().gap(6).items_center().justify_end()
         .child(commentButton(`line-delete-${note.id}`, 'Delete', t, cx => {
           removeSavedComment(note.id);
           this.note = 'Comment deleted.';
           this.error = null;
           cx.notify();
-        }, { enabled: !this.busy })));
+        }, { enabled: !this.busy }))
+        .child(note.sentAt ? div().text_size(11).text_color(t.ansi2).child(`Sent to ${note.sentTo}`) :
+          commentButton(`line-send-${note.id}`, this.busy ? 'Sending…' : 'Send to agent', t,
+            cx => this.send(note, cx), { primary: true, enabled: canSend })));
   }
   render() {
     const t = theme(), context = this.context, notes = lineComments(context);
     const label = context ? `Line ${lineLabel(context)} · ${context.side === 'old' ? 'Original' : 'Current'} code` : 'Review comment';
-    const hint = this.composing ? 'Saved locally until you send it to an agent' : 'Click the code line to close';
+    const hint = this.composing ? 'Saved locally · Esc to close' : 'Esc to close';
     return div().w_full().max_w(600).h(INLINE_COMMENT_HEIGHT).flex_none().p(6)
-      .child(v_flex().size_full().min_h(0).px(10).py(7).gap(6).rounded(6)
-        .bg(t.surface).border(1).border_color(t.border).text_color(t.foreground).text_size(12)
+      .child(v_flex().size_full().min_h(0).px(11).py(8).gap(7).rounded(8)
+        .bg(t.popover).border(1).border_color(t.border).text_color(t.foreground).text_size(12)
         .on_mouse_down('left', (_e, cx) => cx.stop_propagation())
-        .child(h_flex().h(24).flex_none().gap(8).items_center()
-          .child(div().flex_1().min_w(0).truncate().font_semibold().child(label))
+        .child(h_flex().h(38).flex_none().gap(8).items_center()
+          .child(commentBadge(t))
+          .child(v_flex().flex_1().min_w(0)
+            .child(div().truncate().text_size(13).font_semibold().child(this.composing ? 'New review comment' : 'Review thread'))
+            .child(div().truncate().text_size(11).text_color(t.muted).child(label)))
           .when(!this.composing || notes.length > 0, e => e.child(commentButton('line-comment-mode',
             this.composing ? `Saved (${notes.length})` : 'New comment', t, cx => this.setComposer(!this.composing, cx)))))
         .child(this.composing ? this.composer(t) : this.saved(t, notes))
-        .child(div().h(16).flex_none().text_size(11).truncate()
-          .text_color(this.error ? t.ansi1 : this.note ? t.ansi2 : t.dim).child(this.error || this.note || hint)));
+        .child(h_flex().h(17).flex_none().gap(5).items_center().text_size(11)
+          .text_color(this.error ? t.ansi1 : this.note ? t.ansi2 : t.muted)
+          .when(Boolean(this.note), e => e.child(icon('check', 12)))
+          .child(div().flex_1().min_w(0).truncate().child(this.error || this.note || hint))));
   }
 }

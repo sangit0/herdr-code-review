@@ -422,10 +422,10 @@ export class DiffTab {
         .child(`Selected: ${lineLabel(this.selection)} · ${this.selection.side === "old" ? "original" : "current"}`)))
       .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(hint));
   }
-  rowWithComments(row,t,split,index, pointer) {
+  rowWithComments(row,t,split,index, pointer, font) {
     const height = this.baseSizes[index], breaks = this.rowWraps[index];
     return v_flex().w_full().flex_none().when(this.matchSet?.has(index),e=>e.border_l(MATCH_BORDER).border_color(t.ansi3))
-      .child(div().w_full().h(height).flex_none().relative()
+      .child(div().w_full().h(height).flex_none().relative().font_family(font)
         .child(split ? this.splitRow(row, t, height, breaks, index) : this.inlineRow(row, t, height, breaks?.[0], index))
         .when(Boolean(pointer), e => e.child(pointer)))
       .when(this.selectedRow===row,e=>e.child(h_flex().w_full().child(div().w(this.commentPosition.inset).flex_none()).child(div().w(this.commentPosition.width).flex_none().child(this.thread))));
@@ -526,12 +526,21 @@ export class DiffTab {
     if (this.base?.source?.root && (this.sig() !== this.loadedSig)) this.load(cx);
     const shell = (children) => v_flex().id("scm-diff").track_focus(this.handle)
       .on_key_down((e,cx)=>{
-        if(e.keystroke==="cmd-shift-i"){cx.stop_propagation();this.openComment(cx);}
+        if (e.key === "escape" && (this.selectedRow || this.pendingCommentOpen)) {
+          cx.stop_propagation();
+          this.selectedRow = null;
+          this.pendingCommentOpen = false;
+          this.handle.focus();
+          this.resizeRows();
+          cx.notify();
+        }
+        else if(e.keystroke==="cmd-shift-i"){cx.stop_propagation();this.openComment(cx);}
         else if(e.keystroke==="cmd-f"){cx.stop_propagation();this.openSearch(cx);}
         else if(e.keystroke==="alt-down"||e.keystroke==="alt-up"){cx.stop_propagation();this.moveChange(e.keystroke==="alt-down"?1:-1,cx);}
       }).size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).children(children);
     if (!this.base) return shell([div().p(16).text_color(t.dim).child("Pick a changed file in the Changes panel.")]);
     const split = this.layout === "split";
+    const font = settings().font_family ?? "JetBrains Mono";
     this.resizeRows();
     const list = v_virtual_list("scm-diff-rows", this.display.length, this.sizes, (i) => String(i),
       range => this.display.slice(range.start, range.end).map((row, offset) => {
@@ -539,7 +548,7 @@ export class DiffTab {
         const slot = index % this.pointerRows.length;
         const pointer = offset < this.pointerRows.length && this.pointerRows[slot];
         if (pointer) this.pointerSlots[slot] = index;
-        return this.rowWithComments(row, t, split, index, pointer);
+        return this.rowWithComments(row, t, split, index, pointer, font);
       }))
       .on_item_click((key, cx) => this.rowClicked(Number(key), cx)).track_scroll(this.scroll).size_full();
     const contentWidth=split?Math.max(760,this.diffWidth*2):this.diffWidth;
@@ -554,7 +563,7 @@ export class DiffTab {
       .on_mouse_up("left", () => { this.drag = null; })
       .on_hover(hovered => { if (!hovered) this.drag = null; })
       .on_mouse_down("left",e=>{this.commentPosition=commentPlacement(this.contentLeft??0,e.bounds?.x??0,this.contentWidth??this.viewportWidth,this.viewportWidth);})
-      .font_family(settings().font_family??"JetBrains Mono").text_size(FONT_SIZE)
+      .text_size(FONT_SIZE)
       .child(div().id(`scm-diff-x-${this.horizontalVersion}`).size_full().when(!this.wrapLines, e => e.overflow_x_scrollbar())
         .child(div().size_full().when(!this.wrapLines, e => e.min_w(contentWidth))
         .on_size_change(size=>{this.contentWidth=size.width;})

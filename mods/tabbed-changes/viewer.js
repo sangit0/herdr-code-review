@@ -159,11 +159,12 @@ export class FileTab {
   changesView(t) {
     this.updateSizes();
     const width=this.fileWidth;
+    const font = settings().font_family ?? "JetBrains Mono";
     const list = v_virtual_list("scm-file-rows", this.lines.length, this.rowSizes, (i) => String(i),
-      (range) => { const out = []; for (let i = range.start; i < range.end; i++) out.push(v_flex().w_full().flex_none().child(this.row(i, t))
+      (range) => { const out = []; for (let i = range.start; i < range.end; i++) out.push(v_flex().w_full().flex_none().child(this.row(i, t).font_family(font))
         .when(this.selected===i,e=>e.child(this.thread))
 ); return out; }).on_item_click((key, cx) => { this.selectLine(Number(key), cx); }).size_full();
-    return div().flex_1().min_h(0).relative().font_family(settings().font_family ?? "JetBrains Mono").text_size(FONT_SIZE)
+    return div().flex_1().min_h(0).relative().text_size(FONT_SIZE)
       .on_size_change((size, cx) => {
         if (this.viewportWidth === size.width) return;
         this.viewportWidth = size.width;
@@ -184,7 +185,17 @@ export class FileTab {
     const t = theme(), has = this.changed > 0 || this.deletedBefore.size > 0, rel = this.rel();
     const name = G.basename(this.file ?? "File");
     return v_flex().id("scm-file").track_focus(this.handle)
-      .on_key_down((e,cx)=>{if(e.keystroke==="cmd-shift-i"){cx.stop_propagation();this.openComment(cx);}}).size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground)
+      .on_key_down((e, cx) => {
+        if (e.key === "escape" && this.selected !== null) {
+          cx.stop_propagation();
+          this.selected = null;
+          this.handle.focus();
+          cx.notify();
+        } else if (e.keystroke === "cmd-shift-i") {
+          cx.stop_propagation();
+          this.openComment(cx);
+        }
+      }).size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground)
       .child(h_flex().h(44).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
         .child(fileIcon(this.file ?? "", 18))
         .child(div().font_bold().text_size(15).flex_none().child(name))

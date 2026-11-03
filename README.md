@@ -16,6 +16,8 @@ A VS Code-style Source Control mod with branch switching, explicit upstream push
 4. Write your feedback and click **Save comment**. The card switches to your saved notes. Choose **New comment** to write another.
 5. Choose an idle agent in the same Herdr space, then click **Send to agent** on the saved comment.
 
+Press **Esc** to close an inline thread. Reopen it to continue your draft.
+
 Open **Comments** at the bottom of Source Control to see every saved comment for the current repository. Each entry shows its file, line range, and code version, with actions to send it to an idle agent or remove it.
 
 The message includes the repository, file path, line range, old/new side, code snapshot, and your feedback. Sending submits it immediately. A successful send removes the comment; a failed send keeps it for retry. The mod never interrupts agents or forces past their prompts.
@@ -92,7 +94,9 @@ Only the detected default branch is shown—there are no separate main/master bu
 
 ### Review views
 
-![Inline diff with lines 15–18 selected and the comment composer open](docs/screenshots/diff.png)
+![Inline review thread with a saved comment, selected agent, and Esc hint](docs/screenshots/diff.png)
+
+![Comments overview showing a saved review comment and agent actions](docs/screenshots/comments.png)
 
 ![Side-by-side diff with wrapped code on both sides](docs/screenshots/side-by-side.png)
 

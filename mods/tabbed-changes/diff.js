@@ -3,7 +3,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
 import { props, spaces, panes, focused, shared, setShared, exec, readTextFile, watchFolder, theme, settings } from "herdr";
-import { InlineComments, lineComments, INLINE_HEIGHT } from "./comments.js";
+import { InlineComments, lineComments, inlineHeight } from "./comments.js";
 import { contextForRow, findMatchingRow } from "./comment-model.js";
 import * as G from "./git.js";
 import { VIEW_KEY, openInEditor, openFileTab, showDiff } from "./tabs.js";
@@ -178,7 +178,7 @@ export class DiffTab {
 
   close() { this.thread.release(); }
   resizeRows() {
-    this.sizes=this.display.map(r=> (r.kind==="file"?FILE_ROW:ROW) + (this.selectedRow===r?INLINE_HEIGHT:this.notesForRow(r).length?22:0));
+    this.sizes=this.display.map(r=> (r.kind==="file"?FILE_ROW:ROW) + (this.selectedRow===r?inlineHeight(contextForRow(r,this.base?.source,this.commentSide)):this.notesForRow(r).length?22:0));
   }
   notesForRow(row) { return lineComments(contextForRow(row,this.base?.source,this.commentSide)); }
   commentBar(t) {

@@ -3,7 +3,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
 import { props, exec, readTextFile, theme, settings } from "herdr";
-import { InlineComments, lineComments, INLINE_HEIGHT } from "./comments.js";
+import { InlineComments, lineComments, inlineHeight } from "./comments.js";
 import * as G from "./git.js";
 import { toolButton, codeLine, fileIcon } from "./ui.js";
 import { openInEditor, showDiff } from "./tabs.js";
@@ -83,7 +83,7 @@ export class FileTab {
 
   changesView(t) {
     const width = Math.max(400, Math.max(...this.lines.map((l) => l.length), 0) * 7.4 + 90);
-    const list = v_virtual_list("scm-file-rows", this.lines.length, this.lines.map((_l,i)=>ROW+(this.selected===i?INLINE_HEIGHT:lineComments(this.context(i)).length?22:0)), (i) => String(i),
+    const list = v_virtual_list("scm-file-rows", this.lines.length, this.lines.map((_l,i)=>ROW+(this.selected===i?inlineHeight(this.context(i)):lineComments(this.context(i)).length?22:0)), (i) => String(i),
       (range) => { const out = []; for (let i = range.start; i < range.end; i++) out.push(v_flex().w_full().flex_none().child(this.row(i, t))
         .when(this.selected===i,e=>e.child(this.thread))
         .when(this.selected!==i && lineComments(this.context(i)).length>0,e=>e.child(div().h(22).px(54).text_color(t.accent).child(`${lineComments(this.context(i)).length} comment(s) · click line to view`)))); return out; }).on_item_click((key, cx) => { this.selectLine(Number(key), cx); }).size_full();

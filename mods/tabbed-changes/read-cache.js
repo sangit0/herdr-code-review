@@ -32,10 +32,10 @@ export class Coalescer {
   cancel(){this.ticket++;this.pending=false;this.task?.cancel();this.task=null;}
 }
 export class Memo {
-  constructor(limit=512){this.limit=limit;this.entries=new Map();}
+  constructor(limit=512,maxKey=10000){this.limit=limit;this.maxKey=maxKey;this.entries=new Map();}
   get(key,compute) {
     if(this.entries.has(key)){const value=this.entries.get(key);this.entries.delete(key);this.entries.set(key,value);return value;}
-    const value=compute();if(key.length>10000)return value;
+    const value=compute();if(key.length>this.maxKey)return value;
     this.entries.set(key,value);while(this.entries.size>this.limit)this.entries.delete(this.entries.keys().next().value);
     return value;
   }

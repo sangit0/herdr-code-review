@@ -2,7 +2,7 @@
 // markers in the gutter (green added, blue modified, red deleted-here) and a tint on changed lines.
 import { div } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
-import { props, exec, readTextFile, theme, settings, watchFolder, shared } from "herdr";
+import { props, readTextFile, theme, settings, watchFolder, shared } from "herdr";
 import { InlineComments, lineComments, inlineHeight } from "./comments.js";
 import { rangeContext, isOutdated } from "./comment-model.js";
 import { Coalescer } from "./read-cache.js";
@@ -63,9 +63,10 @@ export class FileTab {
           this.fileWidth=Math.max(400,this.lines.reduce((n,line)=>Math.max(n,line.length),0)*7.4+90);this.sizesKey=null;
         }
         this.marks={}; this.deletedBefore=new Set(); this.changed=0;
-        if (rel) await this.loadMarks(rel, on, this.lines.length);
+        if (rel) await this.loadMarks(rel,on,this.lines.length);
+        this.markStamp=JSON.stringify([this.marks,[...this.deletedBefore]]);
         this.error=null; this.ready = true;
-        if(this.selected!==null){
+        if(this.selected!==null && textChanged){
           this.selection=rangeContext(this.selection,{...this.selection,line:this.selection.endLine??this.selection.line},this.references()) ?? this.context(Math.min(this.selected,this.lines.length-1));
           this.selected=(this.selection.endLine??this.selection.line)-1;this.updateThread(false);
         }
@@ -84,7 +85,7 @@ export class FileTab {
         const diff = await git(["diff", "HEAD", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--", rel]);
         if (diff.code === 0) Object.assign(this, G.lineMarks(diff.stdout));
       }
-      this.changed = Object.keys(this.marks).length;this.markStamp=JSON.stringify([this.marks,[...this.deletedBefore]]);
+      this.changed = Object.keys(this.marks).length;
     } catch { /* no git here: the file still shows */ }
   }
 
@@ -114,6 +115,7 @@ export class FileTab {
     this.thread.set_props({context:this.selection,references:this.references(),focus});
   }
   selectLine(i, cx) {
+    if(!this.context(i))return;
     this.handle.focus();
     if (!this.shift && i === this.selected) { this.selected=null; cx.notify(); return; }
     if(!this.shift || this.anchor===null)this.anchor=i;
@@ -144,7 +146,7 @@ export class FileTab {
 
   render(cx) {
     const event=shared(REPOSITORY_EVENT);
-    if(event?.root===this.source.root && (event.on??null)===(this.source.on??null) && event.version!==this.repositoryVersion){this.repositoryVersion=event.version;this.requestRefresh(cx);}
+    if(event?.root===this.source.root && (event.on??null)===(this.source.on??null) && event.version!==this.repositoryVersion){this.repositoryVersion=event.version;invalidateReads();this.metadataDirty=true;this.load(cx);}
     const t = theme(), has = this.changed > 0 || this.deletedBefore.size > 0, rel = this.rel();
     const name = G.basename(this.file ?? "File");
     return v_flex().id("scm-file").track_focus(this.handle)

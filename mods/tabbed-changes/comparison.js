@@ -1,3 +1,4 @@
+import {diffFlags} from "./review-model.js";
 // Remote comparison helpers use explicit remote-tracking refs and immutable commit IDs.
 export async function resolveOrigin(git, requested='origin') {
   if(!['origin','origin/main','origin/master'].includes(requested))throw new Error('Unsupported comparison target.');
@@ -16,7 +17,7 @@ export async function resolveOrigin(git, requested='origin') {
   }
   throw new Error(requested==='origin'?'No origin/main or origin/master reference. Use Fetch origin, or configure the origin remote.':`${requested} is unavailable. Use Fetch origin or choose the other branch.`);
 }
-export function comparisonArgs(sha,path) {
+export function comparisonArgs(sha,path,options={}) {
   if(!/^[0-9a-f]{40,64}$/.test(sha))throw new Error('Invalid comparison commit.');
-  return ['diff','--no-ext-diff','--no-textconv','--no-color','--no-renames',sha,'--',...(path?[path]:[])];
+  return ['diff','--no-ext-diff','--no-textconv','--no-color','--no-renames',...diffFlags(options),sha,'--',...(path?[path]:[])];
 }

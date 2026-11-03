@@ -22,4 +22,4 @@ const burst=new R.Coalescer();const schedule=fn=>{const task={fn,canceled:false,
 for(let i=0;i<25;i++)burst.request(schedule,()=>ran++);
 assert.equal(scheduled.length,1);scheduled[0].fn({});assert.equal(ran,1);
 burst.request(schedule,()=>ran++);burst.cancel();scheduled[1].fn({});assert.equal(ran,1);
-console.log('read cache: 25 overlapping requests / 1 scheduled refresh; invalidation and bounds ok');
+console.log('read cache: 2 overlapping reads -> 1 load; 25 watch events -> 1 refresh; invalidation and bounds ok');

@@ -1,7 +1,11 @@
 import { div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { tokenize, extOf } from "./highlight.js";
+import { Memo } from "./read-cache.js";
+import { splitTokens } from "./review-model.js";
 import { iconFor } from "./fileicons.js";
+
+const syntax=new Memo(128,4096);
 
 export const DIR = "mods/tabbed-changes/icons";
 export const icon = (name, size = 14) => svg(`${DIR}/${name}.svg`).size(size).flex_none();
@@ -28,11 +32,11 @@ export function toolButton(id, name, label, t, onClick, { active } = {}) {
 }
 
 // One line of code with syntax colours.
-export function codeLine(text, path, t) {
+export function codeLine(text, path, t, spans=[], tone=t.accent) {
   const ext = extOf(path ?? ""), color = { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi6, constant: t.ansi6, punct: t.muted };
   return h_flex().flex_1().min_w(0).overflow_hidden().whitespace_nowrap()
-    .children(tokenize(text, ext).map((tok) => div().flex_none().child(tok.text).when(Boolean(tok.kind), (e) => e.text_color(color[tok.kind]))
-      .when(tok.kind === "keyword", (e) => e.font_semibold())));
+    .children(splitTokens(syntax.get(`${ext}\0${text}`,()=>tokenize(text,ext)),spans).map((tok) => div().flex_none().child(tok.text).when(Boolean(tok.kind), (e) => e.text_color(color[tok.kind]))
+      .when(tok.kind === "keyword", (e) => e.font_semibold()).when(Boolean(tok.changed),e=>e.bg(tone+"77"))));
 }
 
 // The file-type icon for a path (Material Icon Theme subset), in colour.

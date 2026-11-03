@@ -2,6 +2,7 @@ const withBase = (context,row) => context && context.side==='old' && row.baseRev
 // Pure comment context and delivery rules. No Herdr imports, so these are testable in Node.
 export function contextForRow(row, source, side = 'new') {
   if (!row?.path || !source?.root) return null;
+  if(row.oldContextUnavailable && side==='old' && (row.kind===' ' || (row.kind==='c'&&!row.l?.change)))return null;
   if (row.kind === 'c') {
     const cell = side === 'old' ? row.l : row.r;
     return withBase(cell?.n ? { source, path: row.path, line: cell.n, side, code: cell.text } : null,row);
@@ -42,12 +43,19 @@ export function findMatchingRow(rows, context) {
     return next && next.path===context.path && next.line===context.line && next.side===context.side && next.code===context.code;
   }) ?? null;
 }
-const sameFile = (a,b) => a && b && a.path===b.path && a.side===b.side && (a.base??null)===(b.base??null) && a.source.root===b.source.root && (a.source.on??null)===(b.source.on??null);
+const scopeKey = c => JSON.stringify([c.source.root,c.source.on??null,c.path,c.side,c.base??null]);
+const sameFile = (a,b) => a && b && scopeKey(a)===scopeKey(b);
+const indexes=new WeakMap();
+function indexedContexts(contexts) {
+  let index=indexes.get(contexts);if(index)return index;
+  index=new Map();for(const context of contexts){if(!context)continue;const key=scopeKey(context);if(!index.has(key))index.set(key,new Map());index.get(key).set(context.line,context);}
+  indexes.set(contexts,index);return index;
+}
 export function rangeContext(start,end,contexts) {
   if(!sameFile(start,end))return null;
   const line=Math.min(start.line,end.line), endLine=Math.max(start.line,end.line);
   if(endLine-line>=500)return null;
-  const rows=new Map(contexts.filter(c=>sameFile(c,start)).map(c=>[c.line,c]));
+  const rows=indexedContexts(contexts).get(scopeKey(start));if(!rows)return null;
   const code=[];
   for(let i=line;i<=endLine;i++){if(!rows.has(i))return null;code.push(rows.get(i).code);}
   return {...rows.get(line),line,endLine,code:code.join('\n')};

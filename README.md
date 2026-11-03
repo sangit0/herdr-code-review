@@ -27,7 +27,26 @@ The message includes the repository, file path, line range, old/new side, code s
 - **Local persistence:** saved notes are scoped to repository and machine in Herdr shared state. Drafts survive switching lines within an open tab.
 - **Original context:** saved comments retain their original code and line numbers; they are not automatically relocated when code moves.
 
-File views check for changes every three seconds. Diff views use their existing folder watch and refresh cycle. Agent delivery targets agents running **inside Herdr**, not an external Codex desktop chat.
+Local file views watch for relevant changes and use a 10-second fallback refresh. Diff views use their existing folder watch and refresh cycle. Agent delivery targets agents running **inside Herdr**, not an external Codex desktop chat.
+
+## Navigate and inspect diffs
+
+In **All changes**, the **Files** icon toggles a changed-file tree. Filter by filename or path, fold folders, and click a file to jump to its diff. File navigation uses the loaded diff without running Git again.
+
+- **Previous/next change:** toolbar arrows or **Alt+Up / Alt+Down** jump between diff hunks and wrap at the ends.
+- **Find:** **⌘F** opens case-insensitive text/path search within the loaded diff. Enter/Shift+Enter and the search arrows move between matching rows. Searching expands folded files; matches have an amber row marker.
+- **Words:** highlights the changed words inside paired removed/added lines. Work is bounded; unusually large lines use a whole-line highlight fallback.
+- **Ignore spaces:** hides whitespace-only changes, for both local and origin comparisons. Git's filtered context does not retain exact original whitespace, so original-side comments on unchanged context rows are unavailable in this mode. Turn it off to comment on those rows. Removed lines and current-side comments remain available.
+- **Context:** cycles between **3, 10, and 30** unchanged lines around each hunk. Existing selections/drafts are retained when the selected lines still exist in the same comparison.
+- **Horizontal scrolling:** inline and side-by-side views can pan across long lines. Comment boxes open within the visible viewport; **⌘⇧I** reveals/focuses the comment input.
+
+Search and navigation respect the 8,000-row display limit. They do not edit files, fetch, switch branches or push.
+
+### Responsiveness
+
+Folder-watch bursts are coalesced for 150ms. Overlapping read-only Git commands reuse a bounded 400ms cache keyed by repository, machine and arguments; repository operations invalidate it. Unchanged diffs retain their built rows, and file views reuse line contexts and layout sizes. Local file watchers provide updates with a 10-second fallback refresh; unchanged polls do not redraw the file or its comment editor. Syntax tokens and word highlights use bounded caches. Git writes are never cached.
+
+Automated checks verify **two overlapping reads → one command load**, **25 watcher events → one scheduled refresh**, and no row rebuild for an identical diff reload. An optional synthetic benchmark (`npm run benchmark`) compares comment-badge processing with commit `efdc50b`. On one run with 20,000 lines, 50 comments and four passes, the helper took **206.83ms before / 3.18ms after** indexing. This is a helper benchmark, not a measurement of overall Herdr latency or frame rate.
 
 ## Branch switching and Git actions
 
@@ -106,19 +125,21 @@ The default is `nvim`. Set Herdr's shared key `tabbed-changes.editor` to an exec
 
 ```sh
 npm test
-herdr-app check mods/tabbed-changes
+npm run check:herdr
+# Optional synthetic helper benchmark:
+npm run benchmark
 ```
 
 No npm dependencies are required. Tests cover Git parsing, syntax coloring, icons, line/range context, comment scoping, stale snapshots, guarded delivery, and successful-send cleanup. Also exercise the UI in Herdr: the native check does not cover every deferred row or interaction. See [RECIPE.md](RECIPE.md) for a source-based build brief and [docs/PUBLISHING.md](docs/PUBLISHING.md) for publishing.
 
-The comment UI, ranges, keyboard shortcut, badges, and changed-code warnings have been checked in a running Herdr app. A real idle-agent delivery still needs end-to-end verification; send success/failure and cleanup rules are covered by tests.
+The earlier comment UI, ranges, keyboard shortcut, badges, and changed-code warnings were checked in a running Herdr app. The latest navigation/diff pass has automated native materialization and integration checks; live visual/pointer verification was deferred at the user's request. A real idle-agent delivery still needs end-to-end verification; send success/failure and cleanup rules are covered by tests.
 
 ## Limits
 
 - Whole-file staging; no hunk or selected-line staging.
 - Up to 1,000 files in the panel, 8,000 diff rows, and 40 untracked-file previews in All changes.
 - File previews are capped at 400,000 characters and 20,000 lines.
-- Side-by-side diffs have no horizontal scrolling.
+- Context expansion and search remain bounded by the diff-row limit; very large word diffs fall back to whole-line highlighting.
 - Syntax coloring is line-based, so multiline comments and strings are approximate.
 - At most 10,000 characters per comment and 60,000 characters per delivery message.
 - Saved comments can become outdated; the recipient must verify the snapshot against the current code.

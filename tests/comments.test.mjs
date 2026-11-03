@@ -71,3 +71,6 @@ assert.equal(C.forLine([C.makeComment(oldBaseA,'baseline note','old')],oldBaseB)
 const fetchedBase={...oldBaseA,revision:'c'.repeat(40),code:'after fetch'};
 assert.equal(C.forLine([C.makeComment(oldBaseA,'pending','pending')],fetchedBase).length,1,'fetching the same base keeps pending comments visible');
 assert.equal(C.isOutdated(C.makeComment(oldBaseA,'pending','pending'),[fetchedBase]),true);
+assert.equal(C.contextForRow({path:'a.js',kind:' ',old:1,next:1,text:'new whitespace',oldContextUnavailable:true},source,'old'),null,'filtered context must not claim exact original whitespace');
+assert.equal(C.contextForRow({path:'a.js',kind:'-',old:2,text:'exact old line',oldContextUnavailable:true},source,'old').code,'exact old line');
+assert.equal(C.contextForRow({path:'a.js',kind:' ',old:1,next:1,text:'new whitespace',oldContextUnavailable:true},source,'new').code,'new whitespace');

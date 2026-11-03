@@ -25,7 +25,7 @@ export class DiffTab {
     this.pinnedView = p.view ?? null; this.comparisonOverride=null; this.comparisonResolved=null;
     this.startLayout = p.layout ?? null; // "split" | "inline": this tab starts in that layout
     this.collapsed = new Set(); this.display = []; this.sizes = []; this.files = []; this.clicks = 1;
-    this.handle=cx.focus_handle(); this.anchor=null; this.selection=null; this.shift=false; this.refs={old:[],new:[]};
+    this.handle=cx.focus_handle();this.handle.focus(); this.anchor=null; this.selection=null; this.shift=false; this.refs={old:[],new:[]};
     this.selectedRow = null; this.commentSide = "new"; this.thread = cx.new(InlineComments);
     this.refreshQueue=new Coalescer();this.dataStamp=null;
     this.contextLines=3;this.ignoreWhitespace=false;this.wordHighlight=true;this.wordCache=new Memo(256);this.wordPairs=new Map();
@@ -207,8 +207,8 @@ export class DiffTab {
     if(index===null||!this.display[index])return;
     this.cursor=index;this.navFile=this.display[index].path;this.scroll.scroll_to_item(index,"top");cx.notify();
   }
-  moveChange(direction,cx){this.jump(stepTarget(this.changeIndices,this.cursor,direction),cx);}
-  moveMatch(direction,cx){const index=stepTarget(this.matches,this.matchCursor,direction);if(index!==null){this.matchCursor=index;this.jump(index,cx);}}
+  moveChange(direction,cx){this.handle.focus();this.jump(stepTarget(this.changeIndices,this.cursor,direction),cx);}
+  moveMatch(direction,cx){if(this.searchOpen)this.searchInput.focus();const index=stepTarget(this.matches,this.matchCursor,direction);if(index!==null){this.matchCursor=index;this.jump(index,cx);}}
   openSearch(cx){this.searchOpen=true;this.searchInput.focus();cx.notify();}
   navigateFile(key,cx) {
     const node=this.treeNodes.find(n=>`${n.kind}:${n.path}`===key);if(!node)return;

@@ -76,10 +76,10 @@ try {
  tab.load(cx,true);await Promise.all(tasks);
  assert.equal(builds,1,'an identical diff refresh must not rebuild its rows');assert.equal(notifications,1,'an unchanged refresh must not redraw');
  // Exercise the real native-view state logic with host-only input/scroll handles.
- const viewTasks=[],viewCx={focus_handle:()=>({focus(){}}),new:()=>({set_props(){},release(){}}),timer:{every(){}},spawn:fn=>viewTasks.push(fn(viewCx)),notify(){}};
+ const viewTasks=[],viewCx={focus_handle:()=>({focused:false,focus(){this.focused=true;}}),new:()=>({set_props(){},release(){}}),timer:{every(){}},spawn:fn=>viewTasks.push(fn(viewCx)),notify(){}};
  globalThis.__comparisonHost.context=viewCx;
  let drained=0;const drain=async()=>{while(drained<viewTasks.length){const pending=viewTasks.slice(drained);drained=viewTasks.length;await Promise.all(pending);}};
- const review=new DiffTab();review.init(viewCx);review.pinned=true;review.pinnedView={source:{root,on:null},mode:'all'};review.watch=()=>{};
+ const review=new DiffTab();review.init(viewCx);assert.equal(review.handle.focused,true,'a newly opened diff must receive keyboard shortcuts');review.pinned=true;review.pinnedView={source:{root,on:null},mode:'all'};review.watch=()=>{};
  review.load(viewCx);await drain();assert.ok(review.display.length>0);
  const snapshot=review.display;review.load(viewCx,true);await drain();assert.equal(review.display,snapshot,'unchanged reload retains the built display');
  const gitBeforeNavigation=review.dataStamp;

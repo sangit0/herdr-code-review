@@ -3,7 +3,8 @@
 // (single click reuses one preview tab, double click gets a tab of its own).
 import { div } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea } from "gpui-base";
-import { spaces, panes, focused, exec, watchFolder, theme, shared } from "herdr";
+import { spaces, panes, focused, exec, watchFolder, theme, shared, openOverlay } from "herdr";
+import { pushCurrent, pullCurrent, branchTarget, BRANCH_EVENT } from "./branches.js";
 import * as G from "./git.js";
 import { VIEW_KEY, showDiff, updatePreview, openFileTab, openInEditor } from "./tabs.js";
 import { iconButton, icon, fileIcon } from "./ui.js";
@@ -76,6 +77,10 @@ export class Panel {
           return G.parseNumstat(r.stdout);
         };
         const parsed = G.parseStatus(status.stdout, await numstat(["--cached"]), await numstat([]));
+        if(parsed.branch && !parsed.branch.detached){
+          const target=await branchTarget(async args=>{const r=await git(args);if(r.code!==0)throw new Error(r.stderr);return r.stdout;},parsed.branch.name);
+          parsed.branch.upstream=target?.label??null;
+        }
         if (this.key() !== context) return;
         this.root = root; this.on = on; this.hasHead = head.code === 0;
         Object.assign(this, { branch: parsed.branch, staged: parsed.staged, changes: parsed.changes, conflicts: parsed.conflicts, limited: parsed.limited, error: null });
@@ -111,6 +116,12 @@ export class Panel {
   openAll(cx) { if (this.root) showDiff({ source: this.source(), mode: "all" }); cx.notify(); }
   openFile(f) { if (this.root) openFileTab(this.source(), `${this.root}/${f.path}`); }
   openEditor(f, cx) { if (this.root) openInEditor(cx, this.source(), `${this.root}/${f.path}`, 1); }
+
+  chooseBranch() {
+    if(!this.root||this.busy||this.loading)return;
+    openOverlay({mod:"tabbed-changes",kind:"dialog",width:520,height:420,props:{role:"branches",source:this.source()}});
+  }
+  fetch(cx) { this.work(cx,"Fetch",git=>git(["fetch","--no-tags","origin"],["GIT_TERMINAL_PROMPT=0"])); }
 
   // --- git writes -------------------------------------------------------------------------------
   // Runs git writes one after another, then refreshes. Failures show under the list.
@@ -159,9 +170,12 @@ export class Panel {
   push(cx) {
     const b = this.branch;
     if (!b || b.detached) return;
-    this.work(cx, "Push", (git) => git(b.upstream ? ["push"] : ["push", "--set-upstream", "origin", b.name], ["GIT_TERMINAL_PROMPT=0"]));
+    this.work(cx, "Push", git => pushCurrent(async args => (await git(args,["GIT_TERMINAL_PROMPT=0"])).stdout,{name:b.name,upstream:b.upstream}));
   }
-  pull(cx) { this.work(cx, "Pull", (git) => git(["pull", "--ff-only"], ["GIT_TERMINAL_PROMPT=0"])); }
+  pull(cx) {
+    const b=this.branch;if(!b||b.detached||!b.upstream)return;
+    this.work(cx,"Pull",git=>pullCurrent(async args=>(await git(args,["GIT_TERMINAL_PROMPT=0"])).stdout,{name:b.name,upstream:b.upstream}));
+  }
 
   // --- drawing ----------------------------------------------------------------------------------
   pill(id, label, t, onClick) {
@@ -229,22 +243,31 @@ export class Panel {
   }
 
   headerBar(t) {
-    const b = this.branch, busy = this.busy;
-    const bar = h_flex().h(42).flex_none().px(12).gap(6).items_center().border_b(1).border_color(t.border)
-      .child(icon("branch", 14).text_color(t.muted))
-      .child(div().min_w(0).truncate().font_semibold().child(b?.name ?? "Source Control"))
-      .child(div().flex_1());
-    if (busy === "Push" || busy === "Pull") bar.child(div().text_size(11).text_color(t.dim).child(busy === "Push" ? "Pushing…" : "Pulling…"));
-    if (b && !b.detached) {
-      if (b.upstream && b.behind > 0) bar.child(h_flex().gap(1).items_center().child(iconButton("pull", "arrow-down", t, (cx) => this.pull(cx), { color: t.accent, title: "Pull" })).child(div().text_size(11).text_color(t.muted).child(String(b.behind))));
-      if (b.ahead > 0 || (!b.upstream && this.hasHead)) {
-        bar.child(h_flex().gap(1).items_center().child(iconButton("push", "arrow-up", t, (cx) => this.push(cx), { color: t.accent, title: b.upstream ? "Push" : "Publish branch" })).child(div().text_size(11).text_color(t.muted).child(b.upstream ? String(b.ahead) : "publish")));
-      }
-    }
-    return bar
-      .child(iconButton("compare-origin", "branch", t, (cx) => this.compareOrigin(cx), { title: "Compare with origin/main or origin/master" }))
-      .child(iconButton("all-changes", "layers", t, (cx) => this.openAll(cx), { title: "Open all changes in one tab" }))
-      .child(iconButton("refresh", "refresh", t, (cx) => this.refresh(cx), { title: "Refresh" }));
+    return h_flex().h(36).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border)
+      .child(div().flex_1().text_size(11).font_semibold().text_color(t.muted).child("SOURCE CONTROL"))
+      .child(iconButton("compare-origin","columns",t,cx=>this.compareOrigin(cx),{title:"Compare with origin/main or origin/master"}))
+      .child(iconButton("all-changes","layers",t,cx=>this.openAll(cx),{title:"Open all changes"}))
+      .child(iconButton("refresh","refresh",t,cx=>this.refresh(cx),{title:"Refresh Source Control"}));
+  }
+  branchBar(t) {
+    const b=this.branch,enabled=Boolean(b&&!b.detached&&this.hasHead&&!this.busy&&!this.loading);
+    return v_flex().flex_none().px(10).py(6).gap(5).border_b(1).border_color(t.border)
+      .child(h_flex().gap(5).items_center()
+        .child(h_flex().id("checkout-branch").flex_1().min_w(0).gap(5).items_center().cursor_pointer().rounded(3).hover(s=>s.bg(t.hover))
+          .tooltip("Checkout branch…").on_click(()=>this.chooseBranch())
+          .child(icon("branch",14).text_color(t.accent))
+          .child(div().flex_1().min_w(0).truncate().child(b?.name??"Select repository"))
+          .child(icon("chevron-down",12).text_color(t.dim)))
+        .when(Boolean(b?.upstream),el=>el.child(div().flex_none().text_size(11).text_color(t.muted).child(`↓${b.behind} ↑${b.ahead}`))))
+      .child(h_flex().gap(4).items_center()
+        .child(iconButton("fetch","cloud",t,cx=>this.fetch(cx),{title:"Fetch origin"}))
+        .child(iconButton("pull","arrow-down",t,cx=>{if(enabled&&b.upstream)this.pull(cx);},{color:enabled&&b?.upstream?t.muted:t.dim,title:b?.upstream?`Pull from ${b.upstream} (fast-forward only)`:"Pull requires an upstream branch"}))
+        .child(h_flex().id("push-branch").h(24).px(6).gap(5).flex_1().min_w(0).items_center().rounded(3)
+          .bg(t.raised).text_color(enabled?t.accent:t.dim).when(enabled,e=>e.cursor_pointer()).hover(s=>s.bg(t.hover))
+          .tooltip(b?.upstream?`Push ${b.name} to ${b.upstream}`:`Publish ${b?.name??"branch"} to origin`)
+          .on_click((_e,cx)=>{if(enabled)this.push(cx);})
+          .child(icon(b?.upstream?"arrow-up":"cloud-upload",13))
+          .child(div().flex_1().min_w(0).truncate().text_size(11).child(this.busy?`${this.busy}…`:b?.upstream?`Push to ${b.upstream}`:"Publish branch"))));
   }
 
   commitBox(t) {
@@ -257,11 +280,13 @@ export class Panel {
         .child(Textarea.new(this.input).w_full().text_size(12).text_color(t.foreground)))
       .child(div().id("commit").w_full().h(30).flex().items_center().justify_center().rounded(8)
         .bg(enabled ? t.solid : t.raised).text_color(enabled ? t.solid_foreground : t.dim).text_size(12).font_semibold()
-        .when(enabled, (e) => e.cursor_pointer()).on_click((_e, cx) => this.commit(cx)).child(label))
+        .when(enabled, (e) => e.cursor_pointer()).on_click((_e, cx) => this.commit(cx)).child(icon("check",13)).child(div().ml(5).child(label)))
       .when(Boolean(this.message.trim()) && !count && Boolean(this.root) && !this.loading, (e) => e.child(div().text_size(11).text_color(t.dim).child("Stage changes with + to commit them")));
   }
 
   render(cx) {
+    const event=shared(BRANCH_EVENT);
+    if(event && event.root===this.root && (event.on??null)===(this.on??null) && event.at!==this.lastBranchEvent){this.lastBranchEvent=event.at;this.refresh(cx);}
     if (this.key() !== this.context) this.refresh(cx);
     const t = theme();
     const space = spaces().find((s) => s.active), entry = space && shared(VIEW_KEY)?.[space.id];
@@ -282,6 +307,7 @@ export class Panel {
         }
       })
       .child(this.headerBar(t))
+      .child(this.branchBar(t))
       .child(this.commitBox(t))
       .child(list)
       .when(Boolean(this.note), (e) => e.child(div().px(10).py(6).border_t(1).border_color(t.border).text_size(11).text_color(t.ansi1).child(this.note)));

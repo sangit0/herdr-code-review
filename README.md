@@ -29,6 +29,21 @@ The message includes the repository, file path, line range, old/new side, code s
 
 File views check for changes every three seconds. Diff views use their existing folder watch and refresh cycle. Agent delivery targets agents running **inside Herdr**, not an external Codex desktop chat.
 
+## Branch switching and Git actions
+
+Click the **branch name and chevron** in Source Control to open a searchable branch picker. Local branches switch in place; remote branches create a local tracking branch when one does not exist. The picker identifies the current branch and branches checked out in other worktrees. If a local branch with the same name tracks a different remote branch, select that local branch explicitly rather than silently changing its upstream.
+
+Switching uses normal `git switch`: compatible uncommitted changes can carry over, and Git refuses a switch that would overwrite them. The mod does not force checkout, discard changes, or auto-stash.
+
+The compact Git action row provides:
+
+- **Fetch origin** (cloud): update remote refs without merging.
+- **Pull** (down arrow): fast-forward only from the displayed upstream, without automatic stashing.
+- **Push to …** (up arrow): push only the checked-out branch to its configured upstream. The destination is visible in the label and tooltip.
+- **Publish branch** (cloud upload): push the current branch to `origin` under the same name and set its upstream.
+
+Ahead/behind counts appear beside the branch name. Push and Pull recheck the current branch and upstream before acting; if either changed, refresh first. Push uses an explicit branch refspec and does not push unrelated branches or tags. Origin comparisons do not change the push destination. There is no force-push action.
+
 ## Compare with origin/main or origin/master
 
 Use the **Compare origin** branch icon in the Source Control panel to review all differences from the remote default branch. The mod uses `origin/HEAD` when it points to `main` or `master`, otherwise prefers `origin/main` and falls back to `origin/master`.
@@ -59,7 +74,7 @@ These screenshots show the Source Control views; the current mod also includes i
 
 ## Install
 
-Requires Git 2.x and a compatible Herdr app. Developed and checked on macOS with Herdr 0.1.12. Neovim is optional; it is only needed for the editor action.
+Requires Git 2.x with `git switch` support and a compatible Herdr app. Developed and checked on macOS with Herdr 0.1.12. Neovim is optional; it is only needed for the editor action.
 
 From this repository:
 

@@ -7,9 +7,10 @@ import { spaces, panes, focused, exec, watchFolder, theme, shared, openOverlay }
 import { pushCurrent, pullCurrent, branchTarget, BRANCH_EVENT } from "./branches.js";
 import { Coalescer } from "./read-cache.js";
 import { readGit, invalidateReads, invalidateRepository, REPOSITORY_EVENT } from "./repository.js";
+import { resolveOrigin } from "./comparison.js";
 import * as G from "./git.js";
 import { VIEW_KEY, showDiff, updatePreview, openFileTab, openInEditor } from "./tabs.js";
-import { iconButton, icon, fileIcon } from "./ui.js";
+import { iconButton, toolButton, icon, fileIcon } from "./ui.js";
 
 // Where the panel looks: the focused terminal's folder. A diff or file tab (a mod pane with no
 // folder) keeps whatever repository the panel already shows.
@@ -23,7 +24,7 @@ function location(previous) {
 
 export class Panel {
   init(cx) {
-    this.staged = []; this.changes = []; this.conflicts = []; this.branch = null;
+    this.staged = []; this.changes = []; this.conflicts = []; this.branch = null; this.originBase=null;
     this.message = ""; this.collapsed = {}; this.hover = null; this.confirm = null; this.loc = null;
     this.handle = cx.focus_handle(); this.refreshQueue=new Coalescer();
     this.input = TextareaState.new({ placeholder: "Message (⌘Enter to commit)" });
@@ -59,7 +60,7 @@ export class Panel {
   close(){this.watched=null;this.refreshQueue.cancel();this.input.release();}
 
   reset() {
-    this.root = null; this.staged = []; this.changes = []; this.conflicts = []; this.branch = null;
+    this.root = null; this.staged = []; this.changes = []; this.conflicts = []; this.branch = null; this.originBase=null;
     this.message = ""; this.input.set_value(""); this.error = null; this.note = null; this.watched = null; this.limited = false; this.confirm = null;
   }
 
@@ -73,7 +74,7 @@ export class Panel {
       try {
         const top = await readGit({root:cwd,on},["rev-parse", "--show-toplevel"]);
         if (this.key() !== context) return;
-        if (top.code !== 0) { this.root = null; this.staged = []; this.changes = []; this.conflicts = []; this.branch = null; this.error = "Not a git repository"; return; }
+        if (top.code !== 0) { this.root = null; this.staged = []; this.changes = []; this.conflicts = []; this.branch = null; this.originBase=null; this.error = "Not a git repository"; return; }
         const root = top.stdout.trim(), git = (args) => readGit({root,on},args);
         const status = await git(["status", "--porcelain=v1", "-z", "-b", "--no-renames", "--untracked-files=all"]);
         if (status.code !== 0) throw new Error(status.stderr);
@@ -88,7 +89,10 @@ export class Panel {
           const target=await branchTarget(async args=>{const r=await git(args);if(r.code!==0)throw new Error(r.stderr);return r.stdout;},parsed.branch.name);
           parsed.branch.upstream=target?.label??null;
         }
+        let originBase=null;
+        try {originBase=await resolveOrigin(async args=>{const r=await git(args);if(r.code!==0)throw new Error(r.stderr);return r.stdout;},"origin");}catch { /* No conventional origin base has been fetched yet. */ }
         if (this.key() !== context) return;
+        this.originBase=originBase;
         this.root = root; this.on = on; this.hasHead = head.code === 0;
         Object.assign(this, { branch: parsed.branch, staged: parsed.staged, changes: parsed.changes, conflicts: parsed.conflicts, limited: parsed.limited, error: null });
         this.watch(root, cx);
@@ -119,7 +123,7 @@ export class Panel {
     showDiff({ source: this.source(), mode: "file", file: { group: f.group, path: f.path, status: f.status, fresh: f.fresh } }, { pinned: clicks >= 2 });
     cx.notify();
   }
-  compareOrigin(cx) { if(this.root)showDiff({source:this.source(),mode:"all",comparison:"origin"});cx.notify(); }
+  compareOrigin(cx) { if(this.root&&this.originBase&&!this.busy&&!this.loading)showDiff({source:this.source(),mode:"all",comparison:this.originBase.name});cx.notify(); }
   openAll(cx) { if (this.root) showDiff({ source: this.source(), mode: "all" }); cx.notify(); }
   openFile(f) { if (this.root) openFileTab(this.source(), `${this.root}/${f.path}`); }
   openEditor(f, cx) { if (this.root) openInEditor(cx, this.source(), `${this.root}/${f.path}`, 1); }
@@ -252,7 +256,6 @@ export class Panel {
   headerBar(t) {
     return h_flex().h(36).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border)
       .child(div().flex_1().text_size(11).font_semibold().text_color(t.muted).child("SOURCE CONTROL"))
-      .child(iconButton("compare-origin","columns",t,cx=>this.compareOrigin(cx),{title:"Compare with origin/main or origin/master"}))
       .child(iconButton("all-changes","layers",t,cx=>this.openAll(cx),{title:"Open all changes"}))
       .child(iconButton("refresh","refresh",t,cx=>this.refresh(cx),{title:"Refresh Source Control"}));
   }
@@ -265,6 +268,8 @@ export class Panel {
           .child(icon("branch",14).text_color(t.accent))
           .child(div().flex_1().min_w(0).truncate().child(b?.name??"Select repository"))
           .child(icon("chevron-down",12).text_color(t.dim)))
+        .when(Boolean(this.root&&this.originBase),el=>el.child(toolButton("compare-default-branch","columns",this.originBase.name,t,cx=>this.compareOrigin(cx))
+          .tooltip(`Review changes against ${this.originBase.name}`)))
         .when(Boolean(b?.upstream),el=>el.child(div().flex_none().text_size(11).text_color(t.muted).child(`↓${b.behind} ↑${b.ahead}`))))
       .child(h_flex().gap(4).items_center()
         .child(iconButton("fetch","cloud",t,cx=>this.fetch(cx),{title:"Fetch origin"}))

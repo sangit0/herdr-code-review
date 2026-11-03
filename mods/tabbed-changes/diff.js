@@ -238,13 +238,12 @@ export class DiffTab {
     });
   }
   comparisonBar(t) {
-    const remote=this.comparison!=="local";
-    return h_flex().h(30).flex_none().px(12).gap(6).items_center()
-      .child(div().text_size(11).text_color(t.dim).child("Compare:"))
-      .child(toolButton("compare-local","files","Local",t,cx=>this.setComparison("local",cx),{active:!remote}))
-      .child(toolButton("compare-main","branch","origin/main",t,cx=>this.setComparison("origin/main",cx),{active:this.comparisonResolved?.name==="origin/main"}))
-      .child(toolButton("compare-master","branch","origin/master",t,cx=>this.setComparison("origin/master",cx),{active:this.comparisonResolved?.name==="origin/master"}))
-      .child(div().flex_1())
+    if(this.comparison==="local")return null;
+    const label=this.comparisonResolved?.name??(this.comparison==="origin"?"origin default branch":this.comparison);
+    return h_flex().h(28).flex_none().px(12).gap(6).items_center()
+      .child(icon("columns",12).text_color(t.muted))
+      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(`Compared with ${label}`))
+      .child(toolButton("compare-local","files","Local changes",t,cx=>this.setComparison("local",cx)))
       .child(toolButton("compare-fetch","refresh",this.fetching?"Fetching…":"Fetch origin",t,cx=>this.fetchOrigin(cx)));
   }
 

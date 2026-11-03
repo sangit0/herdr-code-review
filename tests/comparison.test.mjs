@@ -16,7 +16,8 @@ registerHooks({resolve(specifier,context,next){return ['herdr','gpui-kit','gpui-
  if(url==='test:herdr')return {format:'module',shortCircuit:true,source:`
  const h=globalThis.__comparisonHost;
  export const props=h.props,shared=h.shared,exec=h.exec,readTextFile=h.read;
- export const spaces=()=>[],panes=()=>[],focused=()=>null,setShared=()=>{},watchFolder=()=>{},theme=()=>({}),settings=()=>({}),run=()=>{},agents=()=>[],hc=()=>{};`};
+ export const openOverlay=()=>{},spaces=()=>h.spaces?.()??[],setShared=(key,value)=>h.setShared?.(key,value);
+ export const panes=()=>[],focused=()=>null,watchFolder=()=>{},theme=()=>({}),settings=()=>({}),run=()=>{},agents=()=>[],hc=()=>{};`};
  if(url==='test:gpui-kit')return {format:'module',shortCircuit:true,source:'export class View {} export const div=()=>{},svg=()=>{},image=()=>{};'};
  if(url==='test:gpui-base')return {format:'module',shortCircuit:true,source:`
  export const v_flex=()=>{},h_flex=()=>{},Scrollbar={},v_virtual_list=()=>{},TextareaState={},Textarea={},Input={};
@@ -27,6 +28,7 @@ registerHooks({resolve(specifier,context,next){return ['herdr','gpui-kit','gpui-
 }});
 const {DiffTab}=await import('../mods/tabbed-changes/diff.js');
 const {FileTab}=await import('../mods/tabbed-changes/viewer.js');
+const {Panel}=await import('../mods/tabbed-changes/panel.js');
 const {invalidateReads}=await import('../mods/tabbed-changes/repository.js');
 const root=mkdtempSync(join(tmpdir(),'herdr-origin-'));
 const run=args=>execFileSync('git',args,{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']});
@@ -123,5 +125,12 @@ try {
  run(['branch','origin/main']);assert.equal((await C.resolveOrigin(git,'origin/main')).sha,base);
  run(['update-ref','-d','refs/remotes/origin/main']);
  await assert.rejects(()=>C.resolveOrigin(git,'origin/main'),/origin\/main/);
+ // The single checkout-adjacent control must open the exact detected base.
+ let selectedView=null;globalThis.__comparisonHost.spaces=()=>[{id:'s',active:true,tabs:[]}];
+ globalThis.__comparisonHost.setShared=(key,value)=>{if(key==='tabbed-changes.view'){entry=value;selectedView=value.s.view;}};
+ const panel=new Panel();Object.assign(panel,{root,on:null,originBase:await C.resolveOrigin(git,'origin')});
+ panel.compareOrigin(viewCx);assert.equal(selectedView.comparison,'origin/master');
+ run(['update-ref','refs/remotes/origin/main',base]);run(['symbolic-ref','refs/remotes/origin/HEAD','refs/remotes/origin/main']);
+ panel.originBase=await C.resolveOrigin(git,'origin');panel.compareOrigin(viewCx);assert.equal(selectedView.comparison,'origin/main');
 } finally {rmSync(root,{recursive:true,force:true});}
 console.log('origin comparison ok');

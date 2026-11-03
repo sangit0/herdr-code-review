@@ -50,7 +50,7 @@ Automated checks verify **two overlapping reads → one command load**, **25 wat
 
 ## Branch switching and Git actions
 
-Click the **branch name and chevron** in Source Control to open a searchable branch picker. Local branches switch in place; remote branches create a local tracking branch when one does not exist. The picker identifies the current branch and branches checked out in other worktrees. If a local branch with the same name tracks a different remote branch, select that local branch explicitly rather than silently changing its upstream.
+Click the **branch name and chevron** in Source Control to open a searchable branch picker. Beside it, a single comparison control shows the detected `origin/main` or `origin/master`. Local branches switch in place; remote branches create a local tracking branch when one does not exist. The picker identifies the current branch and branches checked out in other worktrees. If a local branch with the same name tracks a different remote branch, select that local branch explicitly rather than silently changing its upstream.
 
 Switching uses normal `git switch`: compatible uncommitted changes can carry over, and Git refuses a switch that would overwrite them. The mod does not force checkout, discard changes, or auto-stash.
 
@@ -65,9 +65,9 @@ Ahead/behind counts appear beside the branch name. Push and Pull recheck the cur
 
 ## Compare with origin/main or origin/master
 
-Use the **Compare origin** comparison icon in the Source Control panel to review all differences from the remote default branch. The mod uses `origin/HEAD` when it points to `main` or `master`, otherwise prefers `origin/main` and falls back to `origin/master`.
+Use the **single default-branch comparison control beside checkout** at the top of Source Control to review all differences from the remote default branch. The mod uses `origin/HEAD` when it points to `main` or `master`, otherwise prefers `origin/main` and falls back to `origin/master`.
 
-In a diff tab, use **Local**, **origin/main**, or **origin/master** in the comparison bar. Remote comparison includes committed changes, staged and unstaged edits, deletions, and untracked-file previews. It compares the remote branch's last fetched commit directly with the current working tree; it does not use the branch's merge base. Double-click an All changes file header to drill into that file. Existing comments, line ranges and inline/side-by-side views remain available.
+Only the detected default branch is shown—there are no separate main/master buttons. The diff displays the active comparison and a **Local changes** action to return to local review. Remote comparison includes committed changes, staged and unstaged edits, deletions, and untracked-file previews. It compares the remote branch's last fetched commit directly with the current working tree; it does not use the branch's merge base. Double-click an All changes file header to drill into that file. Existing comments, line ranges and inline/side-by-side views remain available.
 
 **Fetch origin** explicitly runs `git fetch --no-tags origin` to update remote-tracking refs. Viewing a comparison does not fetch automatically, merge, switch branches, or push. If the requested remote branch has not been fetched or does not exist, the view shows an explanation. Old-side comments retain their branch and commit snapshot so feedback from different comparison bases stays separate.
 

@@ -2,9 +2,11 @@
 // markers in the gutter (green added, blue modified, red deleted-here) and a tint on changed lines.
 import { div } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
-import { props, exec, readTextFile, theme, settings } from "herdr";
+import { props, exec, readTextFile, theme, settings, watchFolder, shared } from "herdr";
 import { InlineComments, lineComments, inlineHeight } from "./comments.js";
 import { rangeContext, isOutdated } from "./comment-model.js";
+import { Coalescer } from "./read-cache.js";
+import { readGit, invalidateReads, REPOSITORY_EVENT } from "./repository.js";
 import * as G from "./git.js";
 import { toolButton, codeLine, fileIcon } from "./ui.js";
 import { openInEditor, showDiff } from "./tabs.js";
@@ -17,31 +19,49 @@ export class FileTab {
     this.file = typeof p.file === "string" ? p.file : null;
     this.source = { root: p.root ?? null, on: p.on ?? null };
     this.line = p.line ?? null; this.selected = null; this.anchor = null; this.selection = null; this.shift = false;
-    this.handle=cx.focus_handle();
+    this.handle=cx.focus_handle(); this.refreshQueue=new Coalescer(); this.referenceRows=[];this.fileWidth=400;this.rowSizes=ROW;this.metadataDirty=true;
     this.thread = cx.new(InlineComments);
     this.ready = false; this.lines = []; this.marks = {}; this.deletedBefore = new Set(); this.changed = 0;
     this.loading = Boolean(this.file);
     this.error = this.file ? null : "No file was provided";
     if (this.file) this.load(cx);
-    cx.timer.every(3000,cx=>this.load(cx));
+    this.watch(cx);
+    cx.timer.every(10000,cx=>{this.metadataDirty=true;this.load(cx);});
   }
 
   rel() { const r = this.source.root; return r && this.file.startsWith(`${r}/`) ? this.file.slice(r.length + 1) : null; }
 
+  watch(cx) {
+    if(this.source.on || !this.source.root)return;
+    this.watched=this.source.root;
+    cx.spawn(async cx=>{try{while(this.watched){const paths=await watchFolder(this.watched);if(!this.watched)return;
+      if(paths.some(p=>p===this.watched||p===this.file||p===`${this.watched}/.git`||p.startsWith(`${this.watched}/.git/`)))this.requestRefresh(cx);
+    }}catch{this.watched=null;}});
+  }
+  requestRefresh(cx) {
+    this.refreshQueue.request(fn=>cx.timer.after(150,fn),cx=>{invalidateReads();this.metadataDirty=true;this.load(cx);});
+  }
+
   // The file's text, then its changes against HEAD (an untracked file is all added).
   load(cx) {
-    if(this.inflight)return;
+    if(!this.file)return;
+    if(this.inflight){this.again=true;return;}
     this.inflight=true;
+    const before=[this.loadedText,this.error,this.loading,this.ready,this.markStamp];
     const file = this.file, on = this.source.on, rel = this.rel();
     cx.spawn(async (cx) => {
       try {
         const text = await readTextFile(file, { on });
         if (text === null) { this.ready=false; this.error = "This file is no longer available"; return; }
-        if(text===this.loadedText)return;
-        this.loadedText=text;
+        if(text===this.loadedText && !this.metadataDirty)return;
+        const textChanged=text!==this.loadedText;this.loadedText=text;this.metadataDirty=false;
         if (text.includes("\0")) { this.ready=false; this.error = "Binary file · no text preview"; return; }
         const shown = text.length > 400000 ? text.slice(0, 400000) + "\n… (file truncated)" : text;
-        this.lines = shown.replace(/\n$/, "").split("\n").slice(0, MAX_LINES);
+        if(textChanged){
+          this.lines=shown.replace(/\n$/, "").split("\n").slice(0,MAX_LINES);
+          const path=this.rel();this.referenceRows=path?this.lines.map((code,i)=>({source:this.source,path,line:i+1,side:"new",code})):[];
+          this.fileWidth=Math.max(400,this.lines.reduce((n,line)=>Math.max(n,line.length),0)*7.4+90);this.sizesKey=null;
+        }
         this.marks={}; this.deletedBefore=new Set(); this.changed=0;
         if (rel) await this.loadMarks(rel, on, this.lines.length);
         this.error=null; this.ready = true;
@@ -50,12 +70,12 @@ export class FileTab {
           this.selected=(this.selection.endLine??this.selection.line)-1;this.updateThread(false);
         }
       } catch (e) { this.error = String(e); }
-      finally { this.inflight=false; this.loading = false; cx.notify(); }
+      finally { this.inflight=false;this.loading=false;const after=[this.loadedText,this.error,this.loading,this.ready,this.markStamp];if(before.some((v,i)=>v!==after[i]))cx.notify();if(this.again){this.again=false;this.load(cx);} }
     });
   }
 
   async loadMarks(rel, on, total) {
-    const root = this.source.root, git = (args) => exec("git", [...G.READ, ...args], { cwd: root, on });
+    const root = this.source.root, git = (args) => readGit({root,on},args);
     try {
       const status = await git(["status", "--porcelain=v1", "-z", "--", rel]);
       if (status.code !== 0) return;
@@ -64,7 +84,7 @@ export class FileTab {
         const diff = await git(["diff", "HEAD", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--", rel]);
         if (diff.code === 0) Object.assign(this, G.lineMarks(diff.stdout));
       }
-      this.changed = Object.keys(this.marks).length;
+      this.changed = Object.keys(this.marks).length;this.markStamp=JSON.stringify([this.marks,[...this.deletedBefore]]);
     } catch { /* no git here: the file still shows */ }
   }
 
@@ -83,11 +103,13 @@ export class FileTab {
       .when(below, (e) => e.child(div().absolute().bottom(0).left(0).w_full().h(2).bg(t.ansi1)));
   }
 
-  context(i) {
-    const path = this.rel();
-    return path && i !== null ? {source:this.source,path,line:i+1,side:"new",code:this.lines[i]} : null;
+  context(i) { return this.referenceRows[i]??null; }
+  references() { return this.referenceRows; }
+  updateSizes() {
+    const height=this.selected===null?0:inlineHeight(this.selection),key=`${this.lines.length}:${this.selected}:${height}`;
+    if(key===this.sizesKey)return;this.sizesKey=key;
+    this.rowSizes=this.selected===null?ROW:this.lines.map((_l,i)=>ROW+(this.selected===i?height:0));
   }
-  references() { return this.lines.map((_text,i)=>this.context(i)); }
   updateThread(focus) {
     this.thread.set_props({context:this.selection,references:this.references(),focus});
   }
@@ -106,11 +128,12 @@ export class FileTab {
     this.selected=(this.selection.endLine??this.selection.line)-1;
     this.updateThread(true);cx.notify();
   }
-  close() { this.thread.release(); }
+  close() { this.watched=null;this.refreshQueue.cancel();this.thread.release(); }
 
   changesView(t) {
-    const width = Math.max(400, Math.max(...this.lines.map((l) => l.length), 0) * 7.4 + 90);
-    const list = v_virtual_list("scm-file-rows", this.lines.length, this.lines.map((_l,i)=>ROW+(this.selected===i?inlineHeight(this.selection):0)), (i) => String(i),
+    this.updateSizes();
+    const width=this.fileWidth;
+    const list = v_virtual_list("scm-file-rows", this.lines.length, this.rowSizes, (i) => String(i),
       (range) => { const out = []; for (let i = range.start; i < range.end; i++) out.push(v_flex().w_full().flex_none().child(this.row(i, t))
         .when(this.selected===i,e=>e.child(this.thread))
 ); return out; }).on_item_click((key, cx) => { this.selectLine(Number(key), cx); }).size_full();
@@ -120,6 +143,8 @@ export class FileTab {
   }
 
   render(cx) {
+    const event=shared(REPOSITORY_EVENT);
+    if(event?.root===this.source.root && (event.on??null)===(this.source.on??null) && event.version!==this.repositoryVersion){this.repositoryVersion=event.version;this.requestRefresh(cx);}
     const t = theme(), has = this.changed > 0 || this.deletedBefore.size > 0, rel = this.rel();
     const name = G.basename(this.file ?? "File");
     return v_flex().id("scm-file").track_focus(this.handle)

@@ -55,11 +55,13 @@ try {
  Object.assign(tab,{pinned:false,space:'s',requestAt:1,comparisonOverride:'origin/master',modeOverride:'all',collapsed:new Set(),watched:null});
  // The production shared lookup expects entries keyed by space.
  const actual=entry;entry={s:actual};
- tab.watch=()=>{};tab.build=()=>{};
- const tasks=[],cx={spawn:fn=>tasks.push(fn(cx)),notify:()=>{}};
+ let builds=0,notifications=0;tab.watch=()=>{};tab.build=()=>builds++;
+ const tasks=[],cx={spawn:fn=>tasks.push(fn(cx)),notify:()=>notifications++};
  tab.load(cx);await Promise.all(tasks);
  assert.equal(tab.comparison,'local');assert.equal(tab.mode,'file');assert.equal(tab.error,null);
  assert.equal(tab.files[0].path,'tracked.txt');
+ tab.load(cx,true);await Promise.all(tasks);
+ assert.equal(builds,1,'an identical diff refresh must not rebuild its rows');assert.equal(notifications,1,'an unchanged refresh must not redraw');
  // A branch called "origin/main" must not shadow the remote-tracking ref.
  run(['branch','origin/main']);assert.equal((await C.resolveOrigin(git,'origin/main')).sha,base);
  run(['update-ref','-d','refs/remotes/origin/main']);

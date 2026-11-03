@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node tests/git.test.mjs && node tests/comments.test.mjs && node tests/comparison.test.mjs && node tests/branches.test.mjs"
+    "test": "node tests/git.test.mjs && node tests/comments.test.mjs && node tests/comparison.test.mjs && node tests/branches.test.mjs && node tests/read-cache.test.mjs"
   },
   "description": "VS Code-style Git and code review for Herdr: branch switching, upstream push/pull, origin comparisons, and inline feedback for coding agents."
 }

@@ -6,6 +6,8 @@ import { props, spaces, panes, focused, shared, setShared, exec, readTextFile, w
 import { InlineComments, lineComments, inlineHeight } from "./comments.js";
 import { contextForRow, rangeContext, isOutdated, selectionForRows } from "./comment-model.js";
 import { resolveOrigin, comparisonArgs } from "./comparison.js";
+import { Coalescer } from "./read-cache.js";
+import { readGit, invalidateReads, invalidateRepository, REPOSITORY_EVENT } from "./repository.js";
 import * as G from "./git.js";
 import { VIEW_KEY, openInEditor, openFileTab, showDiff } from "./tabs.js";
 import { iconButton, toolButton, icon, codeLine, fileIcon } from "./ui.js";
@@ -23,6 +25,7 @@ export class DiffTab {
     this.collapsed = new Set(); this.display = []; this.sizes = []; this.files = []; this.clicks = 1;
     this.handle=cx.focus_handle(); this.anchor=null; this.selection=null; this.shift=false; this.refs={old:[],new:[]};
     this.selectedRow = null; this.commentSide = "new"; this.thread = cx.new(InlineComments);
+    this.refreshQueue=new Coalescer(); this.dataStamp=null;
     this.diffWidth = 400; this.truncated = false;
     cx.timer.every(10000, (cx) => this.load(cx, true));
     this.claim();
@@ -51,9 +54,13 @@ export class DiffTab {
     if (this.base?.source?.on || this.watched === root) return;
     this.watched = root;
     cx.spawn(async (cx) => {
-      try { while (this.watched === root) { await watchFolder(root); if (this.watched === root) this.load(cx, true); } }
+      try { while (this.watched === root) { await watchFolder(root); if (this.watched === root) this.requestRefresh(cx); } }
       catch { this.watched = null; }
     });
+  }
+
+  requestRefresh(cx) {
+    this.refreshQueue.request(fn=>cx.timer.after(150,fn),cx=>{invalidateReads();this.load(cx,true);});
   }
 
   load(cx, quiet = false) {
@@ -70,22 +77,25 @@ export class DiffTab {
     const { root, on } = view.source, mode = this.mode, file = this.file, comparison=this.comparison;
     this.watch(root, cx);
     cx.spawn(async (cx) => {
+      let changed=this.loading;
       try {
         const git = async (args) => {
-          const r = await exec("git", [...G.READ, ...args], { cwd: root, on: on ?? null });
+          const r = await readGit({root,on},args);
           if (r.code !== 0) throw new Error(G.tidy(r.stderr) || `git ${args[0]} failed`);
           return r.stdout;
         };
         const remote=comparison!=="local" ? await resolveOrigin(git,comparison) : null;
         const files = mode === "all" ? await this.loadAll(git, root, on,remote) : await this.loadOne(git, root, on, file,remote);
         if (this.sig() !== sig) return;
-        this.comparisonResolved=remote; this.files = files; this.shownSig = sig; this.error = null;
-        this.build();
-      } catch (e) { if (this.sig() === sig) this.error = String(e?.message ?? e); }
+        const stamp=JSON.stringify([sig,remote,files]);
+        if(stamp!==this.dataStamp || this.error){
+          this.dataStamp=stamp;this.comparisonResolved=remote;this.files=files;this.shownSig=sig;this.error=null;this.build();changed=true;
+        }
+      } catch (e) { if (this.sig() === sig){const message=String(e?.message??e);changed=changed||this.error!==message;this.error=message;} }
       finally {
         this.inflight = false; this.loading = false;
         if (this.again) { this.again = false; this.load(cx, true); }
-        cx.notify();
+        if(changed)cx.notify();
       }
     });
   }
@@ -170,6 +180,7 @@ export class DiffTab {
       try {
         const result=await exec("git",["fetch","--no-tags","origin"],{cwd:source.root,on:source.on??null});
         if(result.code!==0)throw new Error(G.tidy(result.stderr||result.stdout)||"Fetch origin failed");
+        invalidateRepository(source);
         if(this.base?.source?.root===source.root && (this.base.source.on??null)===(source.on??null))this.load(cx);
       } catch(e){this.fetchError=String(e.message??e);}
       finally{this.fetching=false;cx.notify();}
@@ -243,7 +254,7 @@ export class DiffTab {
     const notes=lineComments(context), stale=notes.some(n=>isOutdated(n,this.refs[context.side]??[]));
     return div().w(22).flex_none().text_color(stale?t.ansi3:t.accent).child(notes.length?`●${notes.length}`:"+");
   }
-  close() { this.thread.release(); }
+  close() { this.watched=null;this.refreshQueue.cancel();this.thread.release(); }
   resizeRows() {
     this.sizes=this.display.map(r=> (r.kind==="file"?FILE_ROW:ROW) + (this.selectedRow===r?inlineHeight(this.selection):0));
   }
@@ -344,7 +355,8 @@ export class DiffTab {
   }
 
   render(cx) {
-    const t = theme();
+    const t = theme(),event=shared(REPOSITORY_EVENT);
+    if(event?.root===this.base?.source?.root && (event.on??null)===(this.base?.source?.on??null) && event.version!==this.repositoryVersion){this.repositoryVersion=event.version;this.requestRefresh(cx);}
     if (this.base?.source?.root && (this.sig() !== this.loadedSig)) this.load(cx);
     const shell = (children) => v_flex().id("scm-diff").track_focus(this.handle)
       .on_key_down((e,cx)=>{if(e.keystroke==="cmd-shift-i"){cx.stop_propagation();this.openComment(cx);}}).size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).children(children);

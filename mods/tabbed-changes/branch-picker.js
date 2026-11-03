@@ -1,6 +1,7 @@
 import { div } from 'gpui-kit';
 import { v_flex,h_flex,InputState,Input,v_virtual_list,Scrollbar } from 'gpui-base';
 import { props,exec,theme,closeOverlay,setShared } from 'herdr';
+import { invalidateRepository } from "./repository.js";
 import { READ,tidy } from './git.js';
 import { currentBranch,listBranches,switchBranch,BRANCH_EVENT } from './branches.js';
 import { icon,iconButton } from './ui.js';
@@ -34,7 +35,7 @@ export class BranchPicker {
     if(branch.current){closeOverlay(this.overlay);return;}
     this.busy=true;this.error=null;cx.notify();
     cx.spawn(async cx=>{
-      try {await switchBranch(args=>this.git(args),branch,this.expected);setShared(BRANCH_EVENT,{...this.source,at:Date.now()});closeOverlay(this.overlay);}
+      try {await switchBranch(args=>this.git(args),branch,this.expected);invalidateRepository(this.source);setShared(BRANCH_EVENT,{...this.source,at:Date.now()});closeOverlay(this.overlay);}
       catch(e){this.error=String(e.message??e);}
       finally{this.busy=false;cx.notify();}
     });

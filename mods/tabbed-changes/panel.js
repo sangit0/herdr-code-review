@@ -5,6 +5,8 @@ import { div } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea } from "gpui-base";
 import { spaces, panes, focused, exec, watchFolder, theme, shared, openOverlay } from "herdr";
 import { pushCurrent, pullCurrent, branchTarget, BRANCH_EVENT } from "./branches.js";
+import { Coalescer } from "./read-cache.js";
+import { readGit, invalidateReads, invalidateRepository, REPOSITORY_EVENT } from "./repository.js";
 import * as G from "./git.js";
 import { VIEW_KEY, showDiff, updatePreview, openFileTab, openInEditor } from "./tabs.js";
 import { iconButton, icon, fileIcon } from "./ui.js";
@@ -23,7 +25,7 @@ export class Panel {
   init(cx) {
     this.staged = []; this.changes = []; this.conflicts = []; this.branch = null;
     this.message = ""; this.collapsed = {}; this.hover = null; this.confirm = null; this.loc = null;
-    this.handle = cx.focus_handle();
+    this.handle = cx.focus_handle(); this.refreshQueue=new Coalescer();
     this.input = TextareaState.new({ placeholder: "Message (⌘Enter to commit)" });
     this.input.set_auto_grow(2, 6);
     this.input.on("change", (_e, cx) => {
@@ -46,10 +48,15 @@ export class Panel {
     if (this.on || this.watched === root) return;
     this.watched = root;
     cx.spawn(async (cx) => {
-      try { while (this.watched === root) { await watchFolder(root); if (this.watched === root) this.refresh(cx); } }
+      try { while (this.watched === root) { await watchFolder(root); if (this.watched === root) this.requestRefresh(cx); } }
       catch { this.watched = null; }
     });
   }
+
+  requestRefresh(cx) {
+    this.refreshQueue.request(fn=>cx.timer.after(150,fn),cx=>{invalidateReads();this.refresh(cx);});
+  }
+  close(){this.watched=null;this.refreshQueue.cancel();this.input.release();}
 
   reset() {
     this.root = null; this.staged = []; this.changes = []; this.conflicts = []; this.branch = null;
@@ -64,10 +71,10 @@ export class Panel {
     this.loading = true; this.dirty = false;
     cx.spawn(async (cx) => {
       try {
-        const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
+        const top = await readGit({root:cwd,on},["rev-parse", "--show-toplevel"]);
         if (this.key() !== context) return;
         if (top.code !== 0) { this.root = null; this.staged = []; this.changes = []; this.conflicts = []; this.branch = null; this.error = "Not a git repository"; return; }
-        const root = top.stdout.trim(), git = (args) => exec("git", [...G.READ, ...args], { cwd: root, on });
+        const root = top.stdout.trim(), git = (args) => readGit({root,on},args);
         const status = await git(["status", "--porcelain=v1", "-z", "-b", "--no-renames", "--untracked-files=all"]);
         if (status.code !== 0) throw new Error(status.stderr);
         const head = await git(["rev-parse", "--verify", "HEAD"]);
@@ -137,7 +144,7 @@ export class Panel {
     cx.spawn(async (cx) => {
       try { await job(git); }
       catch (e) { if (this.key() === context) this.note = `${label} failed: ${e.message ?? e}`; }
-      finally { this.busy = null; this.refresh(cx); cx.notify(); }
+      finally { invalidateRepository({root,on}); this.busy = null; this.refresh(cx); cx.notify(); }
     });
     cx.notify();
   }
@@ -285,8 +292,8 @@ export class Panel {
   }
 
   render(cx) {
-    const event=shared(BRANCH_EVENT);
-    if(event && event.root===this.root && (event.on??null)===(this.on??null) && event.at!==this.lastBranchEvent){this.lastBranchEvent=event.at;this.refresh(cx);}
+    const event=shared(REPOSITORY_EVENT)??shared(BRANCH_EVENT);
+    if(event && event.root===this.root && (event.on??null)===(this.on??null) && (event.version??event.at)!==this.lastBranchEvent){this.lastBranchEvent=event.version??event.at;invalidateReads();this.refresh(cx);}
     if (this.key() !== this.context) this.refresh(cx);
     const t = theme();
     const space = spaces().find((s) => s.active), entry = space && shared(VIEW_KEY)?.[space.id];

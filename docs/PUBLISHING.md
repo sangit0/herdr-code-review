@@ -1,11 +1,19 @@
-# Publishing checklist
+# Publishing and updates
 
-1. **Screenshots**: `preview.png` at the repo root and the rest in `docs/screenshots/` are already in place (taken on a throwaway repo). Retake any that show anything you don't want public.
-2. **Licence**: `LICENSE` names the copyright holder; change it if it should be someone else. Publishing personal open source from a work machine or account may need your employer's approval; check your company's policy.
-3. **Create the repo and push** from the `herdr-tabbed-changes` directory. Sign in with `gh auth login` first if needed. The command below makes the repository **public**; use `--private` if you prefer:
-   ```sh
-   gh repo create herdr-tabbed-changes --public --source . --push --description "VS Code-style Source Control for Herdr: diffs, multibuffer, file tabs and Neovim, all in tabs"
-   gh repo edit --add-topic herdr-mod
-   ```
-4. herdr.dev lists repos with the `herdr-mod` topic within the hour (needs `RECIPE.md` and `preview.png`, both here).
-5. Sanity: `npm test`, and `herdr-app check mods/tabbed-changes` on a clean Herdr home.
+This project is published at https://github.com/sangit0/herdr-tabbed-changes.
+
+## Publish an update
+
+From the repository directory, run `npm test` and `herdr-app check mods/tabbed-changes`, then try the changed workflow in a running Herdr app. Review staged files, commit, and push `main` to `origin`.
+
+Keep the repository public and keep its `herdr-mod` topic. Herdr's discovery requirements are `mods/<name>/`, `RECIPE.md`, and `preview.png`, without a `layouts/` directory in the shared mod package. The website says community discovery runs within an hour; listing and image screening are controlled by Herdr.
+
+The existing screenshots show the Source Control views. Retake the preview when showcasing the new inline comments, using a disposable repository without private content.
+
+## Rename without disrupting installed mods
+
+The public product name and GitHub repository name can change independently of the internal mod ID. Keep `mods/tabbed-changes/`, layout references, asset paths, and the `tabbed-changes.*` shared-state keys unchanged so current installations and saved comments continue working.
+
+GitHub redirects old repository URLs after a rename. Update the local `origin` to the new URL, and do not create another repository under the old name if you want those redirects to keep working. Herdr does not document whether old mod-listing URLs redirect; allow its index to refresh and verify the new listing.
+
+References: [Herdr mod publishing](https://herdr.dev/mods/), [GitHub repository renaming](https://docs.github.com/en/repositories/creating-and-managing-repositories/renaming-a-repository).

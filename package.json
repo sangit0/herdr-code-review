@@ -4,5 +4,6 @@
   "type": "module",
   "scripts": {
     "test": "node tests/git.test.mjs && node tests/comments.test.mjs"
-  }
+  },
+  "description": "Code review for Herdr with tabbed Git diffs, inline line and range comments, and feedback sent to coding agents."
 }

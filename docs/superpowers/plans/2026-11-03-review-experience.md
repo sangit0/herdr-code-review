@@ -1,0 +1,46 @@
+# Review Experience Implementation Plan
+
+> **For agentic workers:** Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** Improve responsiveness, navigation and diff readability inside the same Herdr mod.
+**Architecture:** Pure read-cache/scheduling and diff/navigation helpers feed the existing native views. Keep virtualized rows, retained input/scroll handles, and explicit Git writes. Work in the existing checkout on feature/review-experience; no new worktree was requested.
+**Tech Stack:** JavaScript, Herdr/GPUI native API, Git CLI, Node assertion tests. No added dependencies.
+**Spec:** ../specs/2026-11-03-review-experience.md
+
+## Global Constraints
+- Preserve tabbed-changes IDs/state and existing review/Git safeguards.
+- Native inputs/scroll handles are created outside render; deferred rows contain no event handlers.
+- Read caches are bounded, keyed by root/machine/arguments and invalidated after repository events; never cache writes.
+- No automatic fetch/push or external editor requirement.
+
+## Review Focus
+- Stale async results after source/options changes: test generation invalidation and production loader guards.
+- Concurrent reads and watcher bursts: assert actual task/command counts.
+- Comment range identity through navigation/context changes: preserve exact source/path/side and snapshots.
+- Huge/Unicode lines: bound word-diff work and preserve the complete source text.
+- Empty/binary/collapsed files and no search results: navigation remains finite and never jumps to wrong rows.
+
+### Task 1: Responsiveness
+Files: create read-cache.js and tests/read-cache.test.mjs; modify panel.js, diff.js, viewer.js; update mutation events in branch-picker.js as needed.
+Interfaces: ReadCache.read(key, loader), invalidate(); Coalescer.request(schedule, work), cancel(). A lazy read-cache wrapper in repository.js keys native Git reads by source/argv. View watchers debounce 150ms and mark their read caches invalid; writes trigger shared repository change events.
+- [ ] Write tests for overlapping reads, TTL, bounds, failure retry, invalidation during flight and source separation; observe failure.
+- [ ] Implement pure cache and coalescer; pass tests.
+- [ ] Wire read-only Git paths and watcher scheduling. Skip identical diff rebuilds; precompute file contexts/width/sizes. Test production loader unchanged-data behavior.
+- [ ] Run suite; record measured request/build counts and commit.
+
+### Task 2: Diff and navigation helpers
+Files: create review-model.js and tests/review-model.test.mjs; modify comparison.js and ui.js.
+Interfaces: diffFlags(options); wordChanges(old,new); changedTargets(rows); searchRows(rows,query); stepTarget(indices,current,direction); fileTree(files,query,collapsed); splitTokens(tokens,spans).
+- [ ] Write literal-fixture tests for options, paired word changes, Unicode/large-line fallback, cyclic navigation, search and folder filtering; observe failure.
+- [ ] Implement bounded helpers, syntax-token caching and highlight rendering.
+- [ ] Verify all local/origin diff commands receive the same whitespace/context flags with real Git tests; commit.
+
+### Task 3: Native review controls
+Files: modify diff.js; add focused review-controls.js if needed; update host stubs/tests and README/RECIPE.
+- [ ] Add retained scroll/input state and cached tree/search/hunk indexes. Wire next/previous hunk, search/matches, file-tree navigation, word/whitespace/context options and split scrolling.
+- [ ] Keep pointer side detection relative to scrolled content; keep range comments and pending drafts correct.
+- [ ] Add integration checks around option/source changes, unchanged reloads and navigation state. Run full suite, native view checks, independent code review, and GUI check if available.
+- [ ] Install updated same mod, update docs and commit. Do not push.
+
+## Execution ledger
+Baseline: npm test passed; clean checkout. Branch feature/review-experience created. Native VirtualListScrollHandle and Timer.after exist in installed declarations. No memory entries found for this project.

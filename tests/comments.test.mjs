@@ -64,3 +64,10 @@ assert.equal(C.forLine([rangeNote],line10).length,1,'gutter badge covers each li
 saved=[note];
 await C.sendAndRemove({note,target:'t1',space:'s1',agents:[target],send:async()=>{saved.push({...note,id:'added-during-send'});return {code:0};},read:()=>saved,write:next=>saved=next});
 assert.deepEqual(saved.map(n=>n.id),['added-during-send']);
+const oldBaseA=C.contextForRow({kind:'-',old:3,path:'a.js',text:'before',baseRevision:'a'.repeat(40),baseLabel:'origin/main'},source);
+const oldBaseB=C.contextForRow({kind:'-',old:3,path:'a.js',text:'before',baseRevision:'b'.repeat(40),baseLabel:'origin/master'},source);
+assert.notEqual(oldBaseA.revision,oldBaseB.revision,'old-side comments must retain their baseline');
+assert.equal(C.forLine([C.makeComment(oldBaseA,'baseline note','old')],oldBaseB).length,0);
+const fetchedBase={...oldBaseA,revision:'c'.repeat(40),code:'after fetch'};
+assert.equal(C.forLine([C.makeComment(oldBaseA,'pending','pending')],fetchedBase).length,1,'fetching the same base keeps pending comments visible');
+assert.equal(C.isOutdated(C.makeComment(oldBaseA,'pending','pending'),[fetchedBase]),true);

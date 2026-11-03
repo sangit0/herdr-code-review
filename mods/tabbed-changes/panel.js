@@ -94,7 +94,7 @@ export class Panel {
   followPick() {
     const space = spaces().find((s) => s.active), entry = space && shared(VIEW_KEY)?.[space.id];
     const shown = entry?.view?.file;
-    if (!shown || entry.view.mode === "all" || entry.view.source?.root !== this.root) return;
+    if (!shown || (entry.view.comparison && entry.view.comparison!=="local") || entry.view.mode === "all" || entry.view.source?.root !== this.root) return;
     if (this.all.some((f) => f.group === shown.group && f.path === shown.path)) return;
     const moved = this.all.find((f) => f.path === shown.path);
     if (moved) updatePreview({ ...entry.view, file: { group: moved.group, path: moved.path, status: moved.status, fresh: moved.fresh } });
@@ -107,6 +107,7 @@ export class Panel {
     showDiff({ source: this.source(), mode: "file", file: { group: f.group, path: f.path, status: f.status, fresh: f.fresh } }, { pinned: clicks >= 2 });
     cx.notify();
   }
+  compareOrigin(cx) { if(this.root)showDiff({source:this.source(),mode:"all",comparison:"origin"});cx.notify(); }
   openAll(cx) { if (this.root) showDiff({ source: this.source(), mode: "all" }); cx.notify(); }
   openFile(f) { if (this.root) openFileTab(this.source(), `${this.root}/${f.path}`); }
   openEditor(f, cx) { if (this.root) openInEditor(cx, this.source(), `${this.root}/${f.path}`, 1); }
@@ -241,6 +242,7 @@ export class Panel {
       }
     }
     return bar
+      .child(iconButton("compare-origin", "branch", t, (cx) => this.compareOrigin(cx), { title: "Compare with origin/main or origin/master" }))
       .child(iconButton("all-changes", "layers", t, (cx) => this.openAll(cx), { title: "Open all changes in one tab" }))
       .child(iconButton("refresh", "refresh", t, (cx) => this.refresh(cx), { title: "Refresh" }));
   }

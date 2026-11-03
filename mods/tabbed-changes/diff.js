@@ -5,6 +5,7 @@ import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
 import { props, spaces, panes, focused, shared, setShared, exec, readTextFile, watchFolder, theme, settings } from "herdr";
 import { InlineComments, lineComments, inlineHeight } from "./comments.js";
 import { contextForRow, rangeContext, isOutdated, selectionForRows } from "./comment-model.js";
+import { resolveOrigin, comparisonArgs } from "./comparison.js";
 import * as G from "./git.js";
 import { VIEW_KEY, openInEditor, openFileTab, showDiff } from "./tabs.js";
 import { iconButton, toolButton, icon, codeLine, fileIcon } from "./ui.js";
@@ -17,7 +18,7 @@ export class DiffTab {
     const p = props() ?? {};
     this.pinned = Boolean(p.pinned);
     this.space = p.space ?? spaces().find((s) => s.active)?.id;
-    this.pinnedView = p.view ?? null;
+    this.pinnedView = p.view ?? null; this.comparisonOverride=null; this.comparisonResolved=null;
     this.startLayout = p.layout ?? null; // "split" | "inline": this tab starts in that layout
     this.collapsed = new Set(); this.display = []; this.sizes = []; this.files = []; this.clicks = 1;
     this.handle=cx.focus_handle(); this.anchor=null; this.selection=null; this.shift=false; this.refs={old:[],new:[]};
@@ -42,7 +43,8 @@ export class DiffTab {
   get mode() { return this.modeOverride ?? this.base?.mode ?? "file"; }
   get file() { return this.fileOverride ?? this.base?.file ?? null; }
   get layout() { return (this.startLayout ?? shared(LAYOUT_KEY)) === "split" ? "split" : "inline"; }
-  sig() { return JSON.stringify([this.base?.source, this.mode, this.file?.group, this.file?.path, this.at]); }
+  get comparison() { return this.comparisonOverride ?? this.base?.comparison ?? "local"; }
+  sig() { return JSON.stringify([this.comparison,this.base?.source, this.mode, this.file?.group, this.file?.path, this.at]); }
 
   // --- loading ----------------------------------------------------------------------------------
   watch(root, cx) {
@@ -58,11 +60,14 @@ export class DiffTab {
     const view = this.base;
     if (!view?.source?.root) return;
     if (this.inflight) { this.again = true; return; }
+    if(!this.pinned && this.requestAt!==this.at){
+      this.requestAt=this.at;this.modeOverride=null;this.fileOverride=null;this.comparisonOverride=null;this.collapsed.clear();
+    }
     const sig = this.sig();
     if (!quiet || sig !== this.loadedSig) { this.loadedSig = sig; this.error = null; }
-    if (sig !== this.shownSig) { this.display = []; this.sizes = []; this.files = []; this.selectedRow = null; this.selection=null; this.anchor=null; this.loading = true; }
+    if (sig !== this.shownSig) { this.display = []; this.sizes = []; this.files = []; this.selectedRow = null; this.selection=null; this.anchor=null; this.comparisonResolved=null; this.loading = true; }
     this.inflight = true;
-    const { root, on } = view.source, mode = this.mode, file = this.file;
+    const { root, on } = view.source, mode = this.mode, file = this.file, comparison=this.comparison;
     this.watch(root, cx);
     cx.spawn(async (cx) => {
       try {
@@ -71,9 +76,10 @@ export class DiffTab {
           if (r.code !== 0) throw new Error(G.tidy(r.stderr) || `git ${args[0]} failed`);
           return r.stdout;
         };
-        const files = mode === "all" ? await this.loadAll(git, root, on) : await this.loadOne(git, root, on, file);
+        const remote=comparison!=="local" ? await resolveOrigin(git,comparison) : null;
+        const files = mode === "all" ? await this.loadAll(git, root, on,remote) : await this.loadOne(git, root, on, file,remote);
         if (this.sig() !== sig) return;
-        this.files = files; this.shownSig = sig; this.error = null;
+        this.comparisonResolved=remote; this.files = files; this.shownSig = sig; this.error = null;
         this.build();
       } catch (e) { if (this.sig() === sig) this.error = String(e?.message ?? e); }
       finally {
@@ -84,7 +90,7 @@ export class DiffTab {
     });
   }
 
-  async loadOne(git, root, on, f) {
+  async loadOne(git, root, on, f,remote=null) {
     if (!f) return [];
     if (f.fresh) {
       const text = await readTextFile(`${root}/${f.path}`, { on: on ?? null }).catch(() => null);
@@ -93,18 +99,18 @@ export class DiffTab {
       const lines = G.freshLines(text);
       return [{ path: f.path, lines, add: G.countLines(text), del: 0, fresh: true }];
     }
-    const out = await git(["diff", ...(f.group === "staged" ? ["--cached"] : f.group === "head" ? ["HEAD"] : []), "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "--", f.path]);
+    const out = await git(remote?comparisonArgs(remote.sha,f.path):["diff", ...(f.group === "staged" ? ["--cached"] : f.group === "head" ? ["HEAD"] : []), "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "--", f.path]);
     const [one] = G.splitPatch(out);
     if (!one) return [{ path: f.path, lines: ["No text diff available"], add: 0, del: 0 }];
     if (!one.lines.length) one.lines = [one.binary ? "Binary file changed" : "No text diff available"];
     return [one];
   }
 
-  async loadAll(git, root, on) {
+  async loadAll(git, root, on,remote=null) {
     const base = ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames"];
     let head = true;
     try { await git(["rev-parse", "--verify", "HEAD"]); } catch { head = false; }
-    const patch = head ? await git([...base, "HEAD"]) : (await git([...base, "--cached"])) + (await git(base));
+    const patch = remote ? await git(comparisonArgs(remote.sha)) : head ? await git([...base, "HEAD"]) : (await git([...base, "--cached"])) + (await git(base));
     const files = G.splitPatch(patch);
     const seen = new Set(files.map((f) => f.path)), merged = [];
     for (const f of files) { if (!f.lines.length) f.lines = [f.binary ? "Binary file changed" : "No text diff available"]; merged.push(f); }
@@ -135,7 +141,7 @@ export class DiffTab {
       if (split) rows = G.pairRows(rows);
       for (const r of rows) {
         if (out.length >= MAX_ROWS) { this.truncated = true; break; }
-        out.push({ ...r, path: f.path });
+        out.push({ ...r, path: f.path, ...(this.comparisonResolved?{baseRevision:this.comparisonResolved.sha,baseLabel:this.comparisonResolved.name}:{}) });
       }
       if (this.truncated) break;
     }
@@ -151,6 +157,33 @@ export class DiffTab {
     } else this.selectedRow=null;
     this.resizeRows();
     this.diffWidth = Math.max(400, widest * 7.4 + 130);
+  }
+
+  setComparison(comparison,cx) {
+    this.comparisonOverride=comparison; this.modeOverride="all"; this.fileOverride=null;
+    this.collapsed.clear();this.load(cx);cx.notify();
+  }
+  fetchOrigin(cx) {
+    if(this.fetching || !this.base?.source)return;
+    const source={...this.base.source};this.fetching=true;this.fetchError=null;cx.notify();
+    cx.spawn(async cx=>{
+      try {
+        const result=await exec("git",["fetch","--no-tags","origin"],{cwd:source.root,on:source.on??null});
+        if(result.code!==0)throw new Error(G.tidy(result.stderr||result.stdout)||"Fetch origin failed");
+        if(this.base?.source?.root===source.root && (this.base.source.on??null)===(source.on??null))this.load(cx);
+      } catch(e){this.fetchError=String(e.message??e);}
+      finally{this.fetching=false;cx.notify();}
+    });
+  }
+  comparisonBar(t) {
+    const remote=this.comparison!=="local";
+    return h_flex().h(30).flex_none().px(12).gap(6).items_center()
+      .child(div().text_size(11).text_color(t.dim).child("Compare:"))
+      .child(toolButton("compare-local","files","Local",t,cx=>this.setComparison("local",cx),{active:!remote}))
+      .child(toolButton("compare-main","branch","origin/main",t,cx=>this.setComparison("origin/main",cx),{active:this.comparisonResolved?.name==="origin/main"}))
+      .child(toolButton("compare-master","branch","origin/master",t,cx=>this.setComparison("origin/master",cx),{active:this.comparisonResolved?.name==="origin/master"}))
+      .child(div().flex_1())
+      .child(toolButton("compare-fetch","refresh",this.fetching?"Fetching…":"Fetch origin",t,cx=>this.fetchOrigin(cx)));
   }
 
   // --- actions ----------------------------------------------------------------------------------
@@ -258,7 +291,7 @@ export class DiffTab {
       .when(Boolean(cell?.change), (e) => e.bg(color + "40")).when(!cell, (e) => e.bg(t.raised + "88"))
       .when(cell && this.selection && path===this.selection.path && side===this.selection.side && cell.n>=this.selection.line && cell.n<=(this.selection.endLine??this.selection.line),e=>e.bg(t.selected))
       .child(div().w(40).flex_none().text_right().pr(8).text_color(cell?.change ? color : t.dim).when(Boolean(cell?.change), (e) => e.bg(color + "55").font_semibold()).child(cell ? String(cell.n) : ""))
-      .child(this.badge(cell?{source:this.base.source,path,line:cell.n,side,code:cell.text}:null,t))
+      .child(this.badge(cell?contextForRow({kind:"c",path,l:side==="old"?cell:null,r:side==="new"?cell:null,baseRevision:this.comparisonResolved?.sha,baseLabel:this.comparisonResolved?.name},this.base.source,side):null,t))
       .child(cell ? this.code(cell.text, path, t) : div().flex_1());
   }
 
@@ -303,7 +336,7 @@ export class DiffTab {
 
   footer(t) {
     const f = this.file, all = this.mode === "all";
-    const what = all ? "Working tree against HEAD" : f?.fresh ? "New file" : f?.group === "staged" ? "Index against HEAD" : f?.group === "head" ? "Working tree against HEAD" : "Working tree against index";
+    const what = this.comparison!=="local" ? `Working tree against ${this.comparisonResolved?.name??this.comparison} · last fetched reference` : all ? "Working tree against HEAD" : f?.fresh ? "New file" : f?.group === "staged" ? "Index against HEAD" : f?.group === "head" ? "Working tree against HEAD" : "Working tree against index";
     return h_flex().h(22).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(11).text_color(t.dim)
       .child(div().flex_none().child(what))
       .child(div().flex_1().min_w(0).truncate().child(this.base?.source?.root ?? ""))
@@ -332,7 +365,8 @@ export class DiffTab {
         : div().id("scm-diff-x").size_full().overflow_x_scrollbar().child(div().w_full().min_w(this.diffWidth).h_full().child(list)))
       .child(Scrollbar.vertical("scm-diff-rows").viewport_from_layout().absolute().inset_0());
     return shell([
-      this.header(t, cx), this.commentBar(t), this.footer(t),
+      this.header(t, cx), this.comparisonBar(t), this.commentBar(t), this.footer(t),
+      this.fetchError ? div().px(12).py(6).text_size(12).text_color(t.ansi1).child(this.fetchError) : null,
       this.error ? div().px(12).py(8).text_size(12).text_color(t.ansi1).child(this.error) : null,
       !this.display.length && !this.loading && !this.error ? div().p(16).text_color(t.dim).child("No changes in this file") : body,
       this.truncated ? div().px(12).py(4).border_t(1).border_color(t.border).text_size(11).text_color(t.dim).child(`Showing the first ${MAX_ROWS.toLocaleString()} lines`) : null,

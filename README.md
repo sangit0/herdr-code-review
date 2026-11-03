@@ -29,6 +29,14 @@ The message includes the repository, file path, line range, old/new side, code s
 
 File views check for changes every three seconds. Diff views use their existing folder watch and refresh cycle. Agent delivery targets agents running **inside Herdr**, not an external Codex desktop chat.
 
+## Compare with origin/main or origin/master
+
+Use the **Compare origin** branch icon in the Source Control panel to review all differences from the remote default branch. The mod uses `origin/HEAD` when it points to `main` or `master`, otherwise prefers `origin/main` and falls back to `origin/master`.
+
+In a diff tab, use **Local**, **origin/main**, or **origin/master** in the comparison bar. Remote comparison includes committed changes, staged and unstaged edits, deletions, and untracked-file previews. It compares the remote branch's last fetched commit directly with the current working tree; it does not use the branch's merge base. Double-click an All changes file header to drill into that file. Existing comments, line ranges and inline/side-by-side views remain available.
+
+**Fetch origin** explicitly runs `git fetch --no-tags origin` to update remote-tracking refs. Viewing a comparison does not fetch automatically, merge, switch branches, or push. If the requested remote branch has not been fetched or does not exist, the view shows an explanation. Old-side comments retain their branch and commit snapshot so feedback from different comparison bases stays separate.
+
 ## Source Control features
 
 | Feature | Behavior |

@@ -23,7 +23,7 @@ export class InlineComments extends View {
     this.input=TextareaState.new({placeholder:'Comment on this line…',rows:2});
     this.input.on('change',(_e,cx)=>{this.drafts[this.draftKey()]=this.input.value();cx.notify();});
   }
-  draftKey() { const c=this.context; return JSON.stringify(c?[c.source,c.path,c.line,c.endLine??c.line,c.side]:null); }
+  draftKey() { const c=this.context; return JSON.stringify(c?[c.source,c.path,c.line,c.endLine??c.line,c.side,c.base??null,c.revision??null]:null); }
   update(p) {
     this.drafts[this.draftKey()]=this.input.value();
     this.context=p?.context ?? null; this.space=p?.space ?? this.space;

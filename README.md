@@ -59,20 +59,20 @@ Click the **branch name and chevron** in Source Control to open a searchable bra
 
 Switching uses normal `git switch`: compatible uncommitted changes can carry over, and Git refuses a switch that would overwrite them. The mod does not force checkout, discard changes, or auto-stash.
 
-The compact Git action row provides:
+The Git action row below **Comments** at the bottom of Source Control provides:
 
 - **Fetch origin** (cloud): update remote refs without merging.
 - **Pull** (down arrow): fast-forward only from the displayed upstream, without automatic stashing.
-- **Push to …** (up arrow): push only the checked-out branch to its configured upstream. The destination is visible in the label and tooltip.
+- **Push** (up arrow): push only the checked-out branch to its configured upstream. Hover over **Push** to see the destination.
 - **Publish branch** (cloud upload): push the current branch to `origin` under the same name and set its upstream.
 
 Ahead/behind counts appear beside the branch name. Push and Pull recheck the current branch and upstream before acting; if either changed, refresh first. Push uses an explicit branch refspec and does not push unrelated branches or tags. Origin comparisons do not change the push destination. There is no force-push action.
 
 ## Compare with origin/main or origin/master
 
-Use the **single default-branch comparison control beside checkout** at the top of Source Control to review all differences from the remote default branch. The mod uses `origin/HEAD` when it points to `main` or `master`, otherwise prefers `origin/main` and falls back to `origin/master`.
+Use the **default-branch comparison control beside checkout** at the top of Source Control to review your branch against the remote default branch. The mod uses `origin/HEAD` when it points to `main` or `master`, otherwise prefers `origin/main` and falls back to `origin/master`.
 
-Only the detected default branch is shown—there are no separate main/master buttons. The diff displays the active comparison and a **Local changes** action to return to local review. Remote comparison includes committed changes, staged and unstaged edits, deletions, and untracked-file previews. It compares the remote branch's last fetched commit directly with the current working tree; it does not use the branch's merge base. Double-click an All changes file header to drill into that file. Existing comments, line ranges and inline/side-by-side views remain available.
+The diff compares the working tree with the last commit shared by your branch and the fetched default branch (their Git merge base). This includes committed changes, staged and unstaged edits, deletions, and untracked-file previews. Commits that land only on the default branch stay out of your review. Use **Local changes** to return to local review, or double-click an All changes file header to open that file's diff.
 
 **Fetch origin** explicitly runs `git fetch --no-tags origin` to update remote-tracking refs. Viewing a comparison does not fetch automatically, merge, switch branches, or push. If the requested remote branch has not been fetched or does not exist, the view shows an explanation. Old-side comments retain their branch and commit snapshot so feedback from different comparison bases stays separate.
 
@@ -83,7 +83,7 @@ Only the detected default branch is shown—there are no separate main/master bu
 | Source Control panel | Merge, Staged, and Changes sections; file icons; added/deleted counts; stage, unstage, confirmed discard, commit, push, pull, and publish branch. |
 | Branch switching | Search local and remote branches; create tracking branches; protect conflicting local edits. |
 | Upstream Git actions | Fetch, fast-forward Pull, current-branch Push, Publish branch, and ahead/behind counts. |
-| Remote comparison | Compare all committed and local changes directly against the last fetched `origin/main` or `origin/master`. |
+| Remote comparison | Review branch changes and local edits since the last shared commit with `origin/main` or `origin/master`. |
 | Inline feedback | Comment on lines/ranges, show gutter badges and outdated warnings, and send context to a Herdr agent. |
 | Tabbed diffs | Single-click reuses the **Changes** tab. Double-click pins a separate tab labeled with the filename. |
 | All changes | Review changed files in one scrolling view with collapsible file headers. |

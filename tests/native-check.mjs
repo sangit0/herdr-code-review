@@ -37,6 +37,10 @@ try {
    assert.ok(checkout>=0);
    assert.ok(lines.findIndex(l=>l.includes('Str("open-review-comments")')) >
      lines.findIndex(l=>l.includes('Str("scm-list")')), 'comments belong below the changes list');
+   const comments=lines.findIndex(l=>l.includes('Str("open-review-comments")'));
+   for(const id of ['fetch','pull','push-branch']){
+    assert.ok(lines.findIndex(l=>l.includes(`Str("${id}")`))>comments,`${id} belongs below Comments`);
+   }
    if(base){assert.ok(compare>checkout);assert.equal(lines[checkout].match(/^ */)[0].length,lines[compare].match(/^ */)[0].length,'comparison belongs beside checkout');assert.ok(output.includes('text '+JSON.stringify(base)));assert.ok(!output.includes('text '+JSON.stringify(base==='origin/main'?'origin/master':'origin/main')));}
    else assert.equal(compare,-1);
   });

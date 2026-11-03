@@ -271,9 +271,8 @@ export class Panel {
         .child(iconButton("refresh","refresh",t,cx=>this.refresh(cx),{title:"Refresh Source Control"})));
   }
   branchBar(t) {
-    const b=this.branch,enabled=Boolean(b&&!b.detached&&this.hasHead&&!this.busy&&!this.loading);
-    return v_flex().flex_none().px(10).py(6).gap(5).border_b(1).border_color(t.border)
-      .child(h_flex().gap(5).items_center()
+    const b=this.branch;
+    return h_flex().flex_none().px(10).py(6).gap(5).items_center().border_b(1).border_color(t.border)
         .child(h_flex().id("checkout-branch").flex_1().min_w(0).gap(5).items_center().cursor_pointer().rounded(3).hover(s=>s.bg(t.hover))
           .tooltip("Checkout branch…").on_click(()=>this.chooseBranch())
           .child(icon("branch",14).text_color(t.accent))
@@ -281,8 +280,12 @@ export class Panel {
           .child(icon("chevron-down",12).text_color(t.dim)))
         .when(Boolean(this.root&&this.originBase),el=>el.child(toolButton("compare-default-branch","columns",this.originBase.name,t,cx=>this.compareOrigin(cx))
           .tooltip(`Review changes against ${this.originBase.name}`)))
-        .when(Boolean(b?.upstream),el=>el.child(div().flex_none().text_size(11).text_color(t.muted).child(`↓${b.behind} ↑${b.ahead}`))))
-      .child(h_flex().gap(4).items_center()
+        .when(Boolean(b?.upstream),el=>el.child(div().flex_none().text_size(11).text_color(t.muted).child(`↓${b.behind} ↑${b.ahead}`)));
+  }
+
+  remoteActions(t) {
+    const b=this.branch,enabled=Boolean(b&&!b.detached&&this.hasHead&&!this.busy&&!this.loading);
+    return h_flex().flex_none().px(10).py(6).gap(4).items_center().border_t(1).border_color(t.border)
         .child(iconButton("fetch","cloud",t,cx=>this.fetch(cx),{title:"Fetch origin"}))
         .child(iconButton("pull","arrow-down",t,cx=>{if(enabled&&b.upstream)this.pull(cx);},{color:enabled&&b?.upstream?t.muted:t.dim,title:b?.upstream?`Pull from ${b.upstream} (fast-forward only)`:"Pull requires an upstream branch"}))
         .child(h_flex().id("push-branch").h(24).px(6).gap(5).flex_1().min_w(0).items_center().rounded(3)
@@ -290,7 +293,7 @@ export class Panel {
           .tooltip(b?.upstream?`Push ${b.name} to ${b.upstream}`:`Publish ${b?.name??"branch"} to origin`)
           .on_click((_e,cx)=>{if(enabled)this.push(cx);})
           .child(icon(b?.upstream?"arrow-up":"cloud-upload",13))
-          .child(div().flex_1().min_w(0).truncate().text_size(11).child(this.busy?`${this.busy}…`:b?.upstream?`Push to ${b.upstream}`:"Publish branch"))));
+          .child(div().flex_1().min_w(0).truncate().text_size(11).child(this.busy?`${this.busy}…`:b?.upstream?"Push":"Publish branch")));
   }
 
   commitBox(t) {
@@ -347,7 +350,7 @@ export class Panel {
       .child(this.headerBar(t))
       .when(Boolean(this.root), e => e.child(this.branchBar(t)).child(this.commitBox(t)))
       .child(list)
-      .when(Boolean(this.root), e => e.child(this.commentsBar(t, space?.id)))
+      .when(Boolean(this.root), e => e.child(this.commentsBar(t, space?.id)).child(this.remoteActions(t)))
       .when(Boolean(this.note), (e) => e.child(div().px(10).py(6).border_t(1).border_color(t.border).text_size(11).text_color(t.ansi1).child(this.note)));
   }
 }

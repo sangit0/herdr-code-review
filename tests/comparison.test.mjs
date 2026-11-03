@@ -50,6 +50,10 @@ try {
  assert.equal((await C.resolveOrigin(git,'origin')).name,'origin/master');
  assert.equal((await C.resolveOrigin(git,'origin/main')).name,'origin/main');
  await assert.rejects(()=>C.resolveOrigin(git,'--bad'),/comparison/i);
+ writeFileSync(join(root,'upstream.txt'),'main only\n');
+ run(['add','upstream.txt']);run(['commit','-m','main advances']);
+ const upstream=run(['rev-parse','HEAD']).trim();
+ run(['switch','-c','feature',base]);
  writeFileSync(join(root,'tracked.txt'),'committed\n');writeFileSync(join(root,'committed.txt'),'committed only\n');rmSync(join(root,'deleted.txt'));run(['add','.']);run(['commit','-m','branch change']);
  writeFileSync(join(root,'tracked.txt'),'committed\nlocal\n');writeFileSync(join(root,'new.txt'),'untracked\n');
  writeFileSync(join(root,'spacing.txt'),'const   x = 1;\n');writeFileSync(join(root,'contextspace.txt'),'const   x = 1;\nnew\n');
@@ -191,13 +195,21 @@ try {
  review.setComparison('origin/main',viewCx);await drain();
  assert.ok(!review.refs.old.some(c=>c.path==='contextspace.txt'&&c.line===1));
  assert.equal(review.refs.old.find(c=>c.path==='contextspace.txt'&&c.line===2).revision,base);
+ run(['update-ref','refs/remotes/origin/main',upstream]);invalidateReads();
+ review.load(viewCx,true);await drain();
+ assert.equal(review.error,null);
+ assert.ok(!review.files.some(f=>f.path==='upstream.txt'),'a file added only on main must not appear as a branch deletion');
+ for(const path of ['tracked.txt','committed.txt','staged.txt','deleted.txt','new.txt']){
+  assert.ok(review.files.some(f=>f.path===path),`review still includes ${path}`);
+ }
+ assert.equal(review.refs.old.find(c=>c.path==='contextspace.txt'&&c.line===2).revision,base);
  run(['add','contextspace.txt']);invalidateReads();
  review.pinnedView={source:{root,on:null},mode:'file',file:{path:'contextspace.txt',group:'staged'}};review.comparisonOverride='local';review.modeOverride=null;review.fileOverride=null;
  review.load(viewCx);await drain();
  assert.ok(!review.refs.old.some(c=>c.path==='contextspace.txt'&&c.line===1));
  assert.equal(review.refs.old.find(c=>c.path==='contextspace.txt'&&c.line===2).code,'old');
  // A branch called "origin/main" must not shadow the remote-tracking ref.
- run(['branch','origin/main']);assert.equal((await C.resolveOrigin(git,'origin/main')).sha,base);
+ run(['branch','origin/main']);assert.equal((await C.resolveOrigin(git,'origin/main')).sha,upstream);
  run(['update-ref','-d','refs/remotes/origin/main']);
  await assert.rejects(()=>C.resolveOrigin(git,'origin/main'),/origin\/main/);
  // The single checkout-adjacent control must open the exact detected base.

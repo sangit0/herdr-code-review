@@ -17,6 +17,17 @@ export async function resolveOrigin(git, requested='origin') {
   }
   throw new Error(requested==='origin'?'No origin/main or origin/master reference. Use Fetch origin, or configure the origin remote.':`${requested} is unavailable. Use Fetch origin or choose the other branch.`);
 }
+
+export async function resolveReviewBase(git, requested) {
+  const remote = await resolveOrigin(git, requested);
+  try {
+    const sha = (await git(['merge-base', 'HEAD', remote.sha])).trim();
+    return { name: remote.name, sha };
+  } catch (error) {
+    throw new Error(`Could not find a shared commit with ${remote.name}: ${error.message}`);
+  }
+}
+
 export function comparisonArgs(sha,path,options={}) {
   if(!/^[0-9a-f]{40,64}$/.test(sha))throw new Error('Invalid comparison commit.');
   return ['diff','--no-ext-diff','--no-textconv','--no-color','--no-renames',...diffFlags(options),sha,'--',...(path?[path]:[])];

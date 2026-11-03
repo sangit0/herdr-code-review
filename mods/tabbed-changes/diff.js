@@ -5,7 +5,7 @@ import { v_flex, h_flex, Scrollbar, v_virtual_list, InputState, VirtualListScrol
 import { props, spaces, panes, focused, shared, setShared, exec, readTextFile, watchFolder, theme, settings } from "herdr";
 import { InlineComments, lineComments, INLINE_COMMENT_HEIGHT } from "./comments.js";
 import { contextForRow, rangeContext, isOutdated, selectionForRows, selectionCovers, lineLabel } from "./comment-model.js";
-import { resolveOrigin, comparisonArgs } from "./comparison.js";
+import { resolveReviewBase, comparisonArgs } from "./comparison.js";
 import { diffFlags,wordChanges,changedTargets,searchRows,stepTarget,fileTree,commentPlacement,wrapBreaks,wrapColumns } from "./review-model.js";
 import { Coalescer, Memo } from "./read-cache.js";
 import { readGit, invalidateReads, invalidateRepository, REPOSITORY_EVENT } from "./repository.js";
@@ -120,7 +120,7 @@ export class DiffTab {
           if (r.code !== 0) throw new Error(G.tidy(r.stderr) || `git ${args[0]} failed`);
           return r.stdout;
         };
-        const remote=comparison!=="local" ? await resolveOrigin(git,comparison) : null;
+        const remote=comparison!=="local" ? await resolveReviewBase(git,comparison) : null;
         const files = mode === "all" ? await this.loadAll(git, root, on,remote,options) : await this.loadOne(git, root, on, file,remote,options);
         if (this.sig() !== sig) return;
         const stamp=JSON.stringify([sig,remote,files]);
@@ -262,7 +262,7 @@ export class DiffTab {
     const label=this.comparisonResolved?.name??(this.comparison==="origin"?"origin default branch":this.comparison);
     return h_flex().h(28).flex_none().px(12).gap(6).items_center()
       .child(icon("columns",12).text_color(t.muted))
-      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(`Compared with ${label}`))
+      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(`Branch changes vs ${label}`))
       .child(toolButton("compare-local","files","Local changes",t,cx=>this.setComparison("local",cx)))
       .child(toolButton("compare-fetch","refresh",this.fetching?"Fetching…":"Fetch origin",t,cx=>this.fetchOrigin(cx)));
   }
@@ -513,7 +513,7 @@ export class DiffTab {
 
   footer(t) {
     const f = this.file, all = this.mode === "all";
-    const what = this.comparison!=="local" ? `Working tree against ${this.comparisonResolved?.name??this.comparison} · last fetched reference` : all ? "Working tree against HEAD" : f?.fresh ? "New file" : f?.group === "staged" ? "Index against HEAD" : f?.group === "head" ? "Working tree against HEAD" : "Working tree against index";
+    const what = this.comparison!=="local" ? "Working tree against the last shared commit" : all ? "Working tree against HEAD" : f?.fresh ? "New file" : f?.group === "staged" ? "Index against HEAD" : f?.group === "head" ? "Working tree against HEAD" : "Working tree against index";
     return h_flex().h(22).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(11).text_color(t.dim)
       .child(div().flex_none().child(what))
       .child(div().flex_1().min_w(0).truncate().child(this.base?.source?.root ?? ""))

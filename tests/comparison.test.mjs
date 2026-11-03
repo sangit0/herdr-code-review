@@ -7,9 +7,11 @@ const C=await import('../mods/tabbed-changes/comparison.js').catch(()=>({}));
 assert.equal(typeof C.resolveOrigin,'function','origin comparison resolver is required');
 // Stub only native host APIs; exercise the production diff loader against real Git.
 const {registerHooks}=await import('node:module');
-let entry=null;
+let entry=null, savedNotes=[];
 globalThis.__comparisonHost={
- props:()=>({}),shared:key=>key==='tabbed-changes.view'?entry:null,read:async path=>{try{return readFileSync(path,'utf8');}catch{return null;}},
+ props:()=>({}),shared:key=>key==='tabbed-changes.view'?entry:key==='tabbed-changes.comments.v1'?savedNotes:null,
+ setShared:(key,value)=>{if(key==='tabbed-changes.comments.v1')savedNotes=value;},
+ read:async path=>{try{return readFileSync(path,'utf8');}catch{return null;}},
  exec:async (_command,args,{cwd})=>{await globalThis.__comparisonHost.beforeExec?.(args);try{return {code:0,stdout:execFileSync('git',args,{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe']}),stderr:''};}catch(e){return {code:e.status??1,stdout:String(e.stdout??''),stderr:String(e.stderr??'')};}}
 };
 registerHooks({resolve(specifier,context,next){return ['herdr','gpui-kit','gpui-base'].includes(specifier)?{url:`test:${specifier}`,shortCircuit:true}:next(specifier,context);},load(url,context,next){
@@ -20,14 +22,16 @@ registerHooks({resolve(specifier,context,next){return ['herdr','gpui-kit','gpui-
  export const panes=()=>[],focused=()=>null,watchFolder=()=>{},theme=()=>({}),settings=()=>({}),run=()=>{},agents=()=>[],hc=()=>{};`};
  if(url==='test:gpui-kit')return {format:'module',shortCircuit:true,source:'export class View {} export const div=()=>{},svg=()=>{},image=()=>{};'};
  if(url==='test:gpui-base')return {format:'module',shortCircuit:true,source:`
- export const v_flex=()=>{},h_flex=()=>{},Scrollbar={},v_virtual_list=()=>{},TextareaState={},Textarea={},Input={};
+ export const v_flex=()=>{},h_flex=()=>{},Scrollbar={},v_virtual_list=()=>{},Textarea={},Input={};
  export const InputState={new:()=>{let value='',handlers={};return {on:(name,fn)=>handlers[name]=fn,value:()=>value,set_value:v=>{value=v;handlers.change?.({},globalThis.__comparisonHost.context);},focus(){this.focused=true;},release(){}};}};
+ export const TextareaState=InputState;
  export const VirtualListScrollHandle={new:()=>({positions:[],scroll_to_item(i){this.positions.push(i);},release(){}})};
  `};
  return next(url,context);
 }});
 const {DiffTab}=await import('../mods/tabbed-changes/diff.js');
 const {FileTab}=await import('../mods/tabbed-changes/viewer.js');
+const {InlineComments}=await import('../mods/tabbed-changes/comments.js');
 const {Panel}=await import('../mods/tabbed-changes/panel.js');
 const {invalidateReads}=await import('../mods/tabbed-changes/repository.js');
 const root=mkdtempSync(join(tmpdir(),'herdr-origin-'));
@@ -91,17 +95,46 @@ try {
  // Comment selections must survive context-only changes in the same review.
  const selectable=review.display.findIndex(r=>r.path==='tracked.txt'&&r.kind==='+');
  review.rowClicked(selectable,viewCx);const savedSelection={...review.selection};
- review.setDiffOption('contextLines',30,viewCx);await drain();
+ assert.equal(review.selectedRow, null, 'a single code click leaves the thread closed');
+ review.clicks = 2;review.rowClicked(selectable,viewCx);review.clicks = 1;
+ assert.equal(review.selectionMode, 'row', 'double click selects the whole row');
+ assert.equal(review.selectedRow, null, 'double click leaves the thread closed');
+ review.clickedX = 105;review.rowClicked(selectable,viewCx);review.clickedX = undefined;
+ assert.equal(review.selectedRow, review.display[selectable], 'clicking the comment gutter opens the thread');
+ const heightBeforeSave = review.sizes[selectable];
+ const thread = new InlineComments();
+ const threadProps = { context: review.selection, references: review.refs.new, focus: true };
+ thread.init(threadProps, viewCx);
+ assert.equal(thread.composing, true);
+ thread.input.set_value('Saved feedback');
+ thread.save(viewCx);
+ assert.equal(thread.composing, false, 'saving immediately shows the saved comment');
+ assert.equal(savedNotes[0].text, 'Saved feedback');
+ assert.equal(thread.input.value(), '');
+ review.resizeRows();
+ assert.equal(review.sizes[selectable], heightBeforeSave, 'the comment card stays within the virtual row after saving');
+ thread.update(threadProps);
+ assert.equal(thread.composing, false, 'clicking a saved badge opens the notes');
+ thread.update({...threadProps, compose: true});
+ assert.equal(thread.composing, true, 'the keyboard shortcut still opens the composer');
+ review.setDiffOption('contextLines',10,viewCx);await drain();
  assert.equal(review.selection?.code,savedSelection.code,'context expansion must retain a surviving selection');
  assert.equal(review.selection?.line,savedSelection.line);
  review.setDiffOption('contextLines',3,viewCx);await drain();
  // File metadata polls should not rebuild an unchanged comment child.
  const file=new FileTab();file.init(viewCx);Object.assign(file,{file:join(root,'tracked.txt'),source:{root,on:null},watch:()=>{}});
  file.load(viewCx);await drain();file.selectLine(0,viewCx);
+ assert.equal(file.selected, null, 'a file line click leaves the thread closed');
+ file.clicks = 2;file.selectLine(0,viewCx);file.clicks = 1;
+ assert.equal(file.selectionVisible, true);
+ assert.equal(file.selected, null, 'double click selects a file row without opening the thread');
+ file.clickedX = 55;file.selectLine(0,viewCx);file.clickedX = undefined;
+ assert.equal(file.selected, 0, 'the file gutter opens the selected comment');
  let childUpdates=0;file.thread.set_props=()=>childUpdates++;
  const contexts=file.references();file.metadataDirty=true;file.load(viewCx);await drain();
  assert.equal(file.references(),contexts,'file contexts are reused');assert.equal(childUpdates,0,'unchanged metadata must not rebuild the comment child');
  // Rapid A -> B -> A while B is loading must rebuild A after the view was cleared.
+ invalidateReads();
  let releaseSlow,beginSlow;const slowStarted=new Promise(resolve=>beginSlow=resolve);
  globalThis.__comparisonHost.beforeExec=async args=>{if(args.includes('--unified=10')){beginSlow();await new Promise(resolve=>releaseSlow=resolve);}};
  review.setDiffOption('contextLines',10,viewCx);await slowStarted;
@@ -109,6 +142,48 @@ try {
  globalThis.__comparisonHost.beforeExec=null;
  assert.ok(review.display.length>0,'returning to the original option must not leave an empty diff');
  assert.equal(review.contextLines,3);
+ // The clicked half determines the comment target, including when both sides share a row.
+ review.startLayout='split';review.build();
+ const paired=review.display.findIndex(row=>row.path==='contextspace.txt'&&row.l?.text==='old'&&row.r?.text==='new');
+ assert.ok(paired>=0);
+ review.clickedSide='old';review.rowClicked(paired,viewCx);
+ assert.equal(review.selection.side,'old');
+ assert.equal(review.selection.code,'old');
+ review.openComment(viewCx);assert.equal(review.selection.side,'old','the shortcut keeps the clicked side');
+ review.contentWidth=600;review.clickedX=350;
+ review.clickedSide='new';review.rowClicked(paired,viewCx);review.clickedX=undefined;
+ assert.equal(review.selection.side,'new');
+ assert.equal(review.selection.code,'new');
+ assert.equal(review.selectedRow,review.display[paired],'the right gutter opens the current version');
+ const selected = review.selectedRow;
+ const longPair = review.display.findIndex(row => row.path === 'contextspace.txt' && row.l?.text.startsWith('const'));
+ assert.ok(longPair >= 0);
+ review.viewportWidth = 240;
+ review.resizeRows();
+ assert.ok(review.baseSizes[longPair] > 20, 'the virtual row grows with the taller wrapped side');
+ assert.equal(review.selectedRow, selected, 'wrapping does not move the comment to a different source line');
+ review.wrapLines = false;
+ review.resizeRows();
+ assert.equal(review.baseSizes[longPair], 20, 'unwrapped rows return to one visual line');
+ review.wrapLines = true;
+ review.viewportWidth = 600;
+ const previous = review.display.findIndex(row => row.path === 'contextspace.txt' && row.r?.n === 1);
+ assert.ok(previous >= 0);
+ review.clickedX = 480;
+ review.startDrag(paired, { position: { x: 480, y: 100 } });
+ review.moveDrag(previous, { position: { x: 160, y: 80 } }, viewCx);
+ assert.equal(review.selection.side, 'new', 'dragging across the divider keeps the side where the drag started');
+ assert.deepEqual([review.selection.line, review.selection.endLine], [1, 2]);
+ assert.equal(review.selectedRow, null, 'dragging selects the range without opening a comment');
+ review.rowClicked(previous, viewCx);
+ assert.equal(review.selection.endLine, 2, 'the click on mouse release preserves the range');
+ review.openComment(viewCx);
+ assert.equal(review.selectedRow, review.display[paired], 'the comment opens under the end of the range');
+ review.drag = null; review.didDrag = false; review.clickedX = undefined;
+ review.startLayout='inline';review.build();
+ const removed=review.display.findIndex(row=>row.path==='contextspace.txt'&&row.kind==='-');
+ review.rowClicked(removed,viewCx);
+ assert.equal(review.selection.side,'old','an inline deletion always targets the original code');
  review.setDiffOption('ignoreWhitespace',true,viewCx);await drain();
  assert.ok(!review.refs.old.some(c=>c.path==='contextspace.txt'&&c.line===1),'Git -w original context is unavailable for exact comments');
  assert.equal(review.refs.new.find(c=>c.path==='contextspace.txt'&&c.line===1).code,'const   x = 1;');

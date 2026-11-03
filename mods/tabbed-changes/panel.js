@@ -11,12 +11,22 @@ import { resolveOrigin } from "./comparison.js";
 import * as G from "./git.js";
 import { VIEW_KEY, showDiff, updatePreview, openFileTab, openInEditor } from "./tabs.js";
 import { iconButton, toolButton, icon, fileIcon } from "./ui.js";
+import { commentsFor } from "./comments.js";
 
 // Where the panel looks: the focused terminal's folder. A diff or file tab (a mod pane with no
 // folder) keeps whatever repository the panel already shows.
-function location(previous) {
+function location(previous, root) {
   const space = spaces().find((s) => s.active), f = focused();
   const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
+  if (pane?.mod === "tabbed-changes" && space) {
+    const entry = shared(VIEW_KEY)?.[space.id];
+    const source = entry?.tab === pane.tab ? entry.view?.source : null;
+    if (source?.root) {
+      const on = source.on ?? null;
+      if (previous && root === source.root && previous.on === on) return previous;
+      return { cwd: source.root, on };
+    }
+  }
   if (pane && pane.terminal === null && previous) return previous;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on };
@@ -42,7 +52,7 @@ export class Panel {
   }
 
   get all() { return [...this.conflicts, ...this.staged, ...this.changes]; }
-  key() { this.loc = location(this.loc); return JSON.stringify(this.loc); }
+  key() { this.loc = location(this.loc, this.root); return JSON.stringify(this.loc); }
   source() { return { root: this.root, on: this.on ?? null }; }
 
   watch(root, cx) {
@@ -256,8 +266,9 @@ export class Panel {
   headerBar(t) {
     return h_flex().h(36).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border)
       .child(div().flex_1().text_size(11).font_semibold().text_color(t.muted).child("SOURCE CONTROL"))
-      .child(iconButton("all-changes","layers",t,cx=>this.openAll(cx),{title:"Open all changes"}))
-      .child(iconButton("refresh","refresh",t,cx=>this.refresh(cx),{title:"Refresh Source Control"}));
+      .when(Boolean(this.root), e => e
+        .child(iconButton("all-changes","file-diff",t,cx=>this.openAll(cx),{title:"Open all changes"}))
+        .child(iconButton("refresh","refresh",t,cx=>this.refresh(cx),{title:"Refresh Source Control"})));
   }
   branchBar(t) {
     const b=this.branch,enabled=Boolean(b&&!b.detached&&this.hasHead&&!this.busy&&!this.loading);
@@ -296,6 +307,21 @@ export class Panel {
       .when(Boolean(this.message.trim()) && !count && Boolean(this.root) && !this.loading, (e) => e.child(div().text_size(11).text_color(t.dim).child("Stage changes with + to commit them")));
   }
 
+  commentsBar(t, space) {
+    const count = commentsFor(this.source()).length;
+    return div().flex_none().px(8).py(6).border_t(1).border_color(t.border)
+      .child(h_flex().id("open-review-comments").w_full().h(30).px(8).gap(7).items_center().rounded(5)
+        .cursor_pointer().bg(t.raised).hover(style => style.bg(t.hover))
+        .on_click(() => openOverlay({
+          mod: "tabbed-changes", kind: "dialog", width: 580, height: 450,
+          props: { role: "comments", source: this.source(), space },
+        }))
+        .child(icon("comment", 14).text_color(count ? t.accent : t.muted))
+        .child(div().flex_1().font_semibold().text_size(12).child("Comments"))
+        .child(div().min_w(19).px(5).rounded(8).bg(count ? t.selected : t.background)
+          .text_center().text_size(11).text_color(count ? t.accent : t.muted).child(String(count))));
+  }
+
   render(cx) {
     const event=shared(REPOSITORY_EVENT)??shared(BRANCH_EVENT);
     if(event && event.root===this.root && (event.on??null)===(this.on??null) && (event.version??event.at)!==this.lastBranchEvent){this.lastBranchEvent=event.version??event.at;invalidateReads();this.refresh(cx);}
@@ -319,9 +345,9 @@ export class Panel {
         }
       })
       .child(this.headerBar(t))
-      .child(this.branchBar(t))
-      .child(this.commitBox(t))
+      .when(Boolean(this.root), e => e.child(this.branchBar(t)).child(this.commitBox(t)))
       .child(list)
+      .when(Boolean(this.root), e => e.child(this.commentsBar(t, space?.id)))
       .when(Boolean(this.note), (e) => e.child(div().px(10).py(6).border_t(1).border_color(t.border).text_size(11).text_color(t.ansi1).child(this.note)));
   }
 }

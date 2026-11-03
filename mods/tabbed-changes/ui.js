@@ -1,8 +1,8 @@
 import { div, svg, image } from "gpui-kit";
-import { h_flex } from "gpui-base";
+import { h_flex, v_flex } from "gpui-base";
 import { tokenize, extOf } from "./highlight.js";
 import { Memo } from "./read-cache.js";
-import { splitTokens } from "./review-model.js";
+import { splitTokens, wrapTokens } from "./review-model.js";
 import { iconFor } from "./fileicons.js";
 
 const syntax=new Memo(128,4096);
@@ -32,11 +32,34 @@ export function toolButton(id, name, label, t, onClick, { active } = {}) {
 }
 
 // One line of code with syntax colours.
-export function codeLine(text, path, t, spans=[], tone=t.accent) {
+export const CODE_ROW = 20;
+export const COMMENT_GUTTER = 22;
+
+// A virtual row uses native hover styling to reveal this glyph. Its list
+// handles the click since deferred rows cannot register event listeners.
+// The row and its gutter need IDs so GPUI retains their hover state.
+export function commentGutter(t, count, stale, selected) {
+  const color = stale ? t.ansi3 : t.accent;
+  return div().id("comment-gutter").w(COMMENT_GUTTER).h(CODE_ROW).flex_none().flex().items_center().justify_center()
+    .rounded(4).cursor_pointer().hover(style => style.bg(t.selected).text_color(t.accent))
+    .when(count > 0 || selected, element => element.text_color(color))
+    .when(count > 0, element => element.bg(color + "38"))
+    .child(count ? h_flex().gap(1).items_center()
+      .child(icon("comment", 11))
+      .when(count > 1, e => e.child(div().text_size(9).child(count > 9 ? "9+" : String(count)))) : "+");
+}
+
+export function inCommentGutter(x, start) {
+  return x >= start && x < start + COMMENT_GUTTER;
+}
+
+export function codeLine(text, path, t, spans=[], tone=t.accent, breaks=null) {
   const ext = extOf(path ?? ""), color = { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi6, constant: t.ansi6, punct: t.muted };
-  return h_flex().flex_1().min_w(0).overflow_hidden().whitespace_nowrap()
-    .children(splitTokens(syntax.get(`${ext}\0${text}`,()=>tokenize(text,ext)),spans).map((tok) => div().flex_none().child(tok.text).when(Boolean(tok.kind), (e) => e.text_color(color[tok.kind]))
-      .when(tok.kind === "keyword", (e) => e.font_semibold()).when(Boolean(tok.changed),e=>e.bg(tone+"77"))));
+  const tokens = splitTokens(syntax.get(`${ext}\0${text}`, () => tokenize(text, ext)), spans);
+  return v_flex().flex_1().min_w(0).overflow_hidden().text_color(t.foreground).children(wrapTokens(tokens, breaks).map(row =>
+    h_flex().w_full().h(CODE_ROW).flex_none().whitespace_nowrap()
+      .children(row.map((tok) => div().flex_none().child(tok.text.replace(/\t/g, "    ")).when(Boolean(tok.kind), (e) => e.text_color(color[tok.kind]))
+      .when(tok.kind === "keyword", (e) => e.font_semibold()).when(Boolean(tok.changed),e=>e.bg(tone+"77"))))));
 }
 
 // The file-type icon for a path (Material Icon Theme subset), in colour.

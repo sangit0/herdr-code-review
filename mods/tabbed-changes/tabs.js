@@ -18,10 +18,6 @@ function newTab(spaceId, args) {
 }
 
 // A view is { source: { root, on }, mode: "file" | "all", file?: { group, path, status, fresh } }.
-export function viewTitle(view) {
-  return view.mode === "all" ? "All changes" : basename(view.file?.path ?? "Changes");
-}
-
 export function previewView(spaceId) { return shared(VIEW_KEY)?.[spaceId]?.view ?? null; }
 
 // Single click: show `view` in the space's one reusable diff tab, making it if it is gone.
@@ -29,7 +25,8 @@ export function previewView(spaceId) { return shared(VIEW_KEY)?.[spaceId]?.view 
 export function showDiff(view, { pinned = false, select = true } = {}) {
   const space = activeSpace();
   if (!space) return;
-  const name = viewTitle(view);
+  const name = pinned && view.mode === "file" && view.file?.path
+    ? `Changes · ${basename(view.file.path)}` : "Changes";
   if (pinned) {
     newTab(space.id, { name, mod: MOD, props: { role: "diff", pinned: true, view } });
     return;

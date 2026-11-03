@@ -66,3 +66,49 @@ export function commentPlacement(contentLeft,viewportLeft,contentWidth,viewportW
   const inset=Math.min(Math.max(0,viewportLeft-contentLeft),Math.max(0,contentWidth-viewportWidth));
   return {inset,width:Math.max(40,Math.min(600,viewportWidth,contentWidth-inset))};
 }
+
+// Leave room for the scrollbar, match marker and variation in monospace fonts.
+export function wrapColumns(width, gutter, fontSize) {
+  return Math.max(4, Math.floor((width - gutter - 14) / (fontSize * 0.70)));
+}
+
+// Break at whitespace when possible, and within long words when necessary.
+// Offsets refer to the original text so token colors and comment snapshots survive.
+export function wrapBreaks(text, columns) {
+  if (!text || !columns) return null;
+  let start = 0, offset = 0, used = 0, space = 0;
+  const breaks = [];
+  while (offset < text.length) {
+    const point = text.codePointAt(offset);
+    const size = point === 9 ? 4 : point >= 0x2e80 ? 2 : 1;
+    if (used + size > columns && offset > start) {
+      offset = start = space > start ? space : offset;
+      breaks.push(start);
+      used = 0;
+      continue;
+    }
+    offset += point > 0xffff ? 2 : 1;
+    used += size;
+    if (point === 32 || point === 9) space = offset;
+  }
+  return breaks.length ? breaks : null;
+}
+
+export function wrapTokens(tokens, breaks) {
+  if (!breaks) return [tokens];
+  const rows = [[]];
+  let offset = 0, index = 0;
+  for (const token of tokens) {
+    const end = offset + token.text.length;
+    let start = 0;
+    while (breaks[index] <= end) {
+      const cut = breaks[index++] - offset;
+      if (cut > start) rows.at(-1).push({ ...token, text: token.text.slice(start, cut) });
+      rows.push([]);
+      start = cut;
+    }
+    if (start < token.text.length) rows.at(-1).push({ ...token, text: token.text.slice(start) });
+    offset = end;
+  }
+  return rows;
+}

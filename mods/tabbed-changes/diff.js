@@ -1,21 +1,24 @@
 // The diff tab. One file (VS Code's diff editor) or every changed file stacked in one scrolling
-// view (Zed's multibuffer), inline or side by side. Read-only; double-click a line to open the file there in Neovim.
-import { div } from "gpui-kit";
+// view (Zed's multibuffer), inline or side by side, with line and range comments.
+import { View, div } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list, InputState, VirtualListScrollHandle } from "gpui-base";
 import { props, spaces, panes, focused, shared, setShared, exec, readTextFile, watchFolder, theme, settings } from "herdr";
-import { InlineComments, lineComments, inlineHeight } from "./comments.js";
-import { contextForRow, rangeContext, isOutdated, selectionForRows } from "./comment-model.js";
+import { InlineComments, lineComments, INLINE_COMMENT_HEIGHT } from "./comments.js";
+import { contextForRow, rangeContext, isOutdated, selectionForRows, selectionCovers, lineLabel } from "./comment-model.js";
 import { resolveOrigin, comparisonArgs } from "./comparison.js";
-import { diffFlags,wordChanges,changedTargets,searchRows,stepTarget,fileTree,commentPlacement } from "./review-model.js";
+import { diffFlags,wordChanges,changedTargets,searchRows,stepTarget,fileTree,commentPlacement,wrapBreaks,wrapColumns } from "./review-model.js";
 import { Coalescer, Memo } from "./read-cache.js";
 import { readGit, invalidateReads, invalidateRepository, REPOSITORY_EVENT } from "./repository.js";
 import * as G from "./git.js";
 import { VIEW_KEY, openInEditor, openFileTab, showDiff } from "./tabs.js";
 import { reviewToolbar,searchBar,fileNavigator } from "./review-controls.js";
-import { iconButton, toolButton, icon, codeLine, fileIcon } from "./ui.js";
+import { iconButton, toolButton, icon, codeLine, fileIcon, commentGutter, inCommentGutter, COMMENT_GUTTER, CODE_ROW as ROW } from "./ui.js";
 
 const LAYOUT_KEY = "tabbed-changes.layout"; // "inline" | "split", shared so every diff tab agrees
-const ROW = 20, FILE_ROW = 32, MAX_ROWS = 8000, MAX_UNTRACKED = 40;
+const FILE_ROW = 32, MAX_ROWS = 8000, MAX_UNTRACKED = 40, FONT_SIZE = 12;
+const INLINE_GUTTER_START = 98, SPLIT_GUTTER_START = 40, MATCH_BORDER = 3;
+const selectedDiffRow = (row, t) => row.relative().bg(t.accent + "60")
+  .child(div().absolute().top(0).bottom(0).left(0).w(4).bg(t.accent));
 
 export class DiffTab {
   init(cx) {
@@ -26,10 +29,26 @@ export class DiffTab {
     this.startLayout = p.layout ?? null; // "split" | "inline": this tab starts in that layout
     this.collapsed = new Set(); this.display = []; this.sizes = []; this.files = []; this.clicks = 1;
     this.handle=cx.focus_handle();this.handle.focus(); this.anchor=null; this.selection=null; this.shift=false; this.refs={old:[],new:[]};
-    this.selectedRow = null; this.commentSide = "new"; this.thread = cx.new(InlineComments);
+    this.selectedRow = null; this.selectionMode = null; this.thread = cx.new(InlineComments);
     this.refreshQueue=new Coalescer();this.dataStamp=null;
-    this.contextLines=3;this.ignoreWhitespace=false;this.wordHighlight=true;this.wordCache=new Memo(256);this.wordPairs=new Map();
+    this.contextLines=3;this.ignoreWhitespace=false;this.wordHighlight=false;this.wordCache=new Memo(256);this.wordPairs=new Map();
     this.commentPosition={inset:0,width:600};this.viewportWidth=600;this.horizontalVersion=0;
+    this.wrapLines = true;
+    this.pointerRows = [];
+    this.pointerSlots = [];
+    const review = this;
+    // The list renderer cannot register handlers. Retain one lightweight hit
+    // target per visible slot, independent of how many rows the diff contains.
+    this.PointerRow = class extends View {
+      init(p) { this.slot = p.slot; }
+      render() {
+        const hit = event => {
+          review.pointerHit = { index: review.pointerSlots[this.slot], position: event.position };
+        };
+        return div().id(`diff-pointer-${this.slot}`).absolute().inset_0()
+          .on_mouse_down("left", hit).on_mouse_move(hit);
+      }
+    };
     this.scroll=VirtualListScrollHandle.new();this.cursor=-1;this.changeIndices=[];this.matches=[];this.searchQuery="";this.searchOpen=false;this.matchCursor=-1;
     this.showFiles=true;this.folderCollapsed=new Set();this.fileQuery="";this.treeNodes=[];
     this.searchInput=InputState.new({placeholder:"Find in diff…"});
@@ -87,6 +106,8 @@ export class DiffTab {
     if (sig !== this.shownSig) {
       this.pendingSelection=scope===this.shownScope?(this.selection??this.pendingSelection):null;
       this.pendingAnchor=scope===this.shownScope?(this.anchor??this.pendingAnchor):null;
+      this.pendingCommentOpen=scope===this.shownScope && Boolean(this.selectedRow || this.pendingCommentOpen);
+      if (scope !== this.shownScope) this.selectionMode = null;
       this.dataStamp=null;this.display = []; this.baseSizes=[];this.changeIndices=[];this.matches=[];this.matchSet=new Set();this.treeNodes=[];this.sizes = []; this.files = []; this.selectedRow = null; this.selection=null; this.anchor=null; this.comparisonResolved=null; this.loading = true; }
     this.inflight = true;
     const { root, on } = view.source, mode = this.mode, file = this.file, comparison=this.comparison,options=this.diffOptions();
@@ -153,8 +174,10 @@ export class DiffTab {
 
   // Flattens the files into the rows the list draws (inline rows, or paired rows when split).
   build() {
-    const restoring=Boolean(this.pendingSelection);
-    const selectedContext=this.pendingSelection??(this.selectedRow?this.selection:null);
+    const restoring = this.pendingCommentOpen;
+    const threadOpen = Boolean(this.selectedRow || restoring);
+    const selectedContext = this.pendingSelection ?? this.selection;
+    this.pendingCommentOpen = false;
     this.anchor=this.pendingAnchor??this.anchor;this.pendingSelection=null;this.pendingAnchor=null;
     const split = this.layout === "split", all = this.mode === "all", out = [];
     this.wordPairs=new Map();
@@ -178,17 +201,14 @@ export class DiffTab {
       }
       if (this.truncated) break;
     }
-    this.display = out;this.baseSizes=out.map(r=>r.kind==="file"?FILE_ROW:ROW);
+    this.display = out;
     this.changeIndices=changedTargets(out);this.matches=searchRows(out,this.searchQuery??"");this.matchSet=new Set(this.matches);
     this.treeNodes=fileTree(this.files,this.fileQuery??"",this.folderCollapsed??new Set());
     this.cursor=Math.min(this.cursor??-1,out.length-1);
     this.refs={old:out.map(r=>contextForRow(r,this.base?.source,"old")).filter(Boolean),new:out.map(r=>contextForRow(r,this.base?.source,"new")).filter(Boolean)};
     if(selectedContext){
-      this.selection=selectionForRows(out,selectedContext,this.base?.source,this.commentSide);
-      this.selectedRow=this.selection ? out.find(r=>{
-        const c=contextForRow(r,this.base?.source,this.commentSide);
-        return c && c.path===this.selection.path && c.side===this.selection.side && c.line===(this.selection.endLine??this.selection.line);
-      }) ?? null : null;
+      this.selection = selectionForRows(out, selectedContext, this.base?.source, selectedContext.side);
+      this.selectedRow = threadOpen ? this.rowForComment(this.selection) : null;
       if(this.selectedRow){this.updateThread(false);if(restoring)this.scroll?.scroll_to_item(out.indexOf(this.selectedRow),"center");}
     } else this.selectedRow=null;
     this.resizeRows();
@@ -258,74 +278,156 @@ export class DiffTab {
 
   // A file to act on: the one shown, else the clicked row's.
   abs(path) { return `${this.base.source.root}/${path}`; }
-  lineOf(row) { return row.line ?? row.next ?? row.old ?? 1; }
-
+  resizePointerRows(height, cx) {
+    const count = Math.ceil(height / ROW) + 8;
+    if (count <= this.pointerRows.length) return false;
+    while (this.pointerRows.length < count) {
+      this.pointerRows.push(cx.new(this.PointerRow, { slot: this.pointerRows.length }));
+    }
+    return true;
+  }
+  pointerIndex(event) {
+    const hit = this.pointerHit;
+    this.pointerHit = null;
+    return hit?.position.x === event.position.x && hit.position.y === event.position.y ? hit.index : undefined;
+  }
+  commentGutterHit(index, side) {
+    const split = this.layout === "split";
+    const inset = this.matchSet?.has(index) ? MATCH_BORDER : 0;
+    const half = (this.contentWidth - inset - 1) / 2;
+    const left = split && side === "new" ? inset + half + 1 : inset;
+    return inCommentGutter(this.clickedX - left, split ? SPLIT_GUTTER_START : INLINE_GUTTER_START);
+  }
+  startDrag(index, event) {
+    this.drag = null;
+    this.didDrag = false;
+    const side = this.layout === "split" ? this.clickedSide : "new";
+    if (!side || this.clicks !== 1 || this.shift || this.commentGutterHit(index, side)) return;
+    const anchor = contextForRow(this.display[index], this.base?.source, side);
+    if (anchor) this.drag = { anchor, position: event.position, index, display: this.display };
+  }
+  moveDrag(index, event, cx) {
+    const drag = this.drag;
+    if (!drag || drag.display !== this.display || index === undefined) return;
+    if (this.didDrag && index === drag.index) return;
+    if (!this.didDrag && Math.hypot(event.position.x - drag.position.x, event.position.y - drag.position.y) < 4) return;
+    const end = contextForRow(this.display[index], this.base?.source, drag.anchor.side);
+    const selection = rangeContext(drag.anchor, end, this.refs[drag.anchor.side]);
+    if (!selection) return;
+    if (!this.didDrag) this.handle.focus();
+    this.didDrag = true;
+    drag.index = index;
+    this.anchor = drag.anchor;
+    this.selection = selection;
+    this.selectionMode = "range";
+    this.cursor = index;
+    this.selectedRow = null;
+    this.resizeRows();
+    cx.notify();
+  }
   rowClicked(i, cx) {
+    if (this.didDrag) return;
     const row = this.display[i];this.cursor=i;if(row)this.navFile=row.path;
     if (!row) return;
     const double = this.clicks >= 2;
-    const previousSide = this.commentSide;
-    if (this.layout === "split" && this.clickedSide) this.commentSide=this.clickedSide;
-    if (!double && contextForRow(row,this.base?.source,this.commentSide)) {
+    const side = this.layout === "split" ? this.clickedSide : "new";
+    const end = side ? contextForRow(row, this.base?.source, side) : null;
+    if (end) {
       this.handle.focus();
-      const end=contextForRow(row,this.base.source,this.commentSide);
-      if(!this.shift && this.selectedRow===row && previousSide===this.commentSide){this.selectedRow=null;this.resizeRows();cx.notify();return;}
-      if(!this.shift || !this.anchor)this.anchor=end;
-      this.selection=rangeContext(this.anchor,end,this.references());
-      if(!this.selection){this.anchor=end;this.selection=end;}
-      this.selectedRow=this.display.find(r=>{
-        const c=contextForRow(r,this.base.source,this.commentSide);
-        return c && c.path===this.selection.path && c.side===this.selection.side && c.line===(this.selection.endLine??this.selection.line);
-      }) ?? row;
-      this.updateThread(false);this.resizeRows();cx.notify();
+      const gutter = this.commentGutterHit(i, side);
+      if (!gutter || this.shift || !selectionCovers(this.selection, end)) {
+        if (!this.shift || !this.anchor) this.anchor = end;
+        this.selection = rangeContext(this.anchor, end, this.refs[end.side]);
+        if (!this.selection) this.anchor = this.selection = end;
+        this.selectionMode = this.shift ? "range" : double ? "row" : null;
+      }
+      if (gutter) this.showComment(cx);
+      else {
+        this.selectedRow = null;
+        this.resizeRows();
+        cx.notify();
+      }
+      return;
     }
     if (row.kind === "file") {
       if (double) this.setMode("file", cx, this.fileFor(row.path));
       else { this.collapsed.has(row.path) ? this.collapsed.delete(row.path) : this.collapsed.add(row.path); this.build(); cx.notify(); }
       return;
     }
-    if (double && row.kind !== "@" && row.path) openInEditor(cx, this.base.source, this.abs(row.path), this.lineOf(row));
   }
 
-  references() { return this.refs[this.commentSide] ?? []; }
-  updateThread(focus) { this.thread.set_props({context:this.selection,references:this.references(),space:this.space,focus}); }
+  rowForComment(selection) {
+    if (!selection) return null;
+    return this.display.find(row => {
+      const context = contextForRow(row, this.base?.source, selection.side);
+      return context?.path === selection.path && context.side === selection.side &&
+        context.line === (selection.endLine ?? selection.line);
+    }) ?? null;
+  }
+  updateThread(focus, compose = false) {
+    this.thread.set_props({ context: this.selection, references: this.refs[this.selection?.side] ?? [], space: this.space, focus, compose });
+  }
   openComment(cx) {
     this.horizontalVersion++;this.commentPosition={inset:0,width:Math.min(600,this.viewportWidth)};
-    this.selection=selectionForRows(this.display,this.selection,this.base?.source,this.commentSide);
-    if(!this.selection){
-      const row=this.display.find(r=>contextForRow(r,this.base?.source,this.commentSide));
-      if(!row)return;this.selection=contextForRow(row,this.base.source,this.commentSide);this.selectedRow=row;
-    } else {
-      this.selectedRow=this.display.find(r=>{const c=contextForRow(r,this.base?.source,this.commentSide);return c && c.path===this.selection.path && c.line===(this.selection.endLine??this.selection.line) && c.side===this.selection.side;}) ?? null;
-    }
-    if(this.selectedRow){this.updateThread(true);this.resizeRows();cx.notify();}
+    const source = this.base?.source;
+    const row = this.display[this.cursor];
+    this.selection = selectionForRows(this.display, this.selection, source, this.selection?.side) ??
+      contextForRow(row, source, "new") ?? contextForRow(row, source, "old") ??
+      this.refs.new[0] ?? this.refs.old[0] ?? null;
+    this.showComment(cx, true);
+  }
+  showComment(cx, compose = false) {
+    this.selectedRow = this.rowForComment(this.selection);
+    if(this.selectedRow){this.updateThread(true, compose);this.resizeRows();cx.notify();}
   }
   badge(context,t) {
-    if(!context)return div().w(22).flex_none();
+    if(!context)return div().w(COMMENT_GUTTER).flex_none();
     const notes=lineComments(context), stale=notes.some(n=>isOutdated(n,this.refs[context.side]??[]));
-    return div().w(22).flex_none().text_color(stale?t.ansi3:t.accent).child(notes.length?`●${notes.length}`:"+");
+    const selected = (this.selectionMode || this.selectedRow) && selectionCovers(this.selection, context);
+    return commentGutter(t, notes.length, stale, selected);
   }
-  close() { this.watched=null;this.refreshQueue.cancel();this.thread.release();this.scroll.release();this.searchInput.release();this.fileInput.release(); }
+  close() {
+    this.watched=null;this.refreshQueue.cancel();this.thread.release();this.scroll.release();this.searchInput.release();this.fileInput.release();
+    for (const target of this.pointerRows) target.release();
+  }
   resizeRows() {
-    const height=this.selectedRow?inlineHeight(this.selection):0;
-    if(this.sizedDisplay===this.display && this.sizedRow===this.selectedRow && this.sizedHeight===height)return;
-    this.sizedDisplay=this.display;this.sizedRow=this.selectedRow;this.sizedHeight=height;
-    const base=this.baseSizes??this.display.map(r=>r.kind==="file"?FILE_ROW:ROW);
-    this.sizes=this.selectedRow?base.map((size,i)=>size+(this.display[i]===this.selectedRow?height:0)):base;
+    const split = this.layout === "split";
+    const columns = this.wrapLines ? wrapColumns(split ? (this.viewportWidth - 1) / 2 : this.viewportWidth, split ? 62 : 120, FONT_SIZE) : 0;
+    if (this.wrapDisplay !== this.display || this.wrapColumnCount !== columns || this.wrapSplit !== split) {
+      this.wrapDisplay = this.display;
+      this.wrapColumnCount = columns;
+      this.wrapSplit = split;
+      this.rowWraps = this.display.map(row => {
+        if (row.kind === "file" || row.kind === "@") return null;
+        return split ? [wrapBreaks(row.l?.text, columns), wrapBreaks(row.r?.text, columns)] : [wrapBreaks(row.text, columns)];
+      });
+      this.baseSizes = this.display.map((row, index) => {
+        if (row.kind === "file") return FILE_ROW;
+        const [left, right] = this.rowWraps[index] ?? [];
+        return ROW * (1 + Math.max(left?.length ?? 0, right?.length ?? 0));
+      });
+    }
+    const height = this.selectedRow ? INLINE_COMMENT_HEIGHT : 0;
+    if(this.sizedBase===this.baseSizes && this.sizedRow===this.selectedRow && this.sizedHeight===height)return;
+    this.sizedBase=this.baseSizes;this.sizedRow=this.selectedRow;this.sizedHeight=height;
+    this.sizes=this.selectedRow?this.baseSizes.map((size,i)=>size+(this.display[i]===this.selectedRow?height:0)):this.baseSizes;
   }
-  notesForRow(row) { return lineComments(contextForRow(row,this.base?.source,this.commentSide)); }
   commentBar(t) {
-    return h_flex().h(30).px(12).gap(8).items_center().flex_none()
-      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(this.ignoreWhitespace?"Original context comments require showing spaces · ⌘⇧I":"Shift-click for range · ⌘⇧I comment"))
-      .when(this.layout === "split", e => e
-        .child(toolButton("comment-old", "minus", "Old side", t, cx => this.setCommentSide("old",cx), {active:this.commentSide === "old"}))
-        .child(toolButton("comment-new", "plus", "New side", t, cx => this.setCommentSide("new",cx), {active:this.commentSide === "new"})));
+    const hint = this.ignoreWhitespace && this.layout === "split"
+      ? "Show spaces to comment on unchanged lines on the left"
+      : "Hover for + · Drag or Shift-click to select lines · ⌘⇧I to comment";
+    const selected = this.selection && (this.selectionMode || this.selectedRow);
+    return h_flex().h(22).px(12).gap(10).flex_none().items_center().text_size(11)
+      .when(selected, e => e.child(div().flex_none().font_semibold().text_color(t.accent)
+        .child(`Selected: ${lineLabel(this.selection)} · ${this.selection.side === "old" ? "original" : "current"}`)))
+      .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(hint));
   }
-  setCommentSide(side,cx) {
-    this.commentSide=side; this.selectedRow=null; this.anchor=null; this.selection=null; this.resizeRows(); cx.notify();
-  }
-  rowWithComments(row,t,split,index) {
-    return v_flex().w_full().flex_none().when(this.matchSet?.has(index),e=>e.border_l(3).border_color(t.ansi3)).child(split?this.splitRow(row,t):this.inlineRow(row,t))
+  rowWithComments(row,t,split,index, pointer) {
+    const height = this.baseSizes[index], breaks = this.rowWraps[index];
+    return v_flex().w_full().flex_none().when(this.matchSet?.has(index),e=>e.border_l(MATCH_BORDER).border_color(t.ansi3))
+      .child(div().w_full().h(height).flex_none().relative()
+        .child(split ? this.splitRow(row, t, height, breaks, index) : this.inlineRow(row, t, height, breaks?.[0], index))
+        .when(Boolean(pointer), e => e.child(pointer)))
       .when(this.selectedRow===row,e=>e.child(h_flex().w_full().child(div().w(this.commentPosition.inset).flex_none()).child(div().w(this.commentPosition.width).flex_none().child(this.thread))));
   }
 
@@ -336,35 +438,44 @@ export class DiffTab {
 
   // --- drawing ----------------------------------------------------------------------------------
   // A line of code with syntax colours; `tint` keeps added/removed text readable on its stronger background.
-  code(text,path,t,spans=[],tone=t.accent) { return codeLine(text,path,t,spans,tone); }
-
-  inlineRow(r, t) {
+  inlineRow(r, t, height, breaks, index) {
     if (r.kind === "file") return this.fileRow(r, t);
     if (r.kind === "@") return div().w_full().px(12).h(ROW).flex_none().truncate().bg(t.accent + "1c").text_color(t.accent).child(r.text);
     const add = r.kind === "+", del = r.kind === "-", tone = add ? t.ansi2 : t.ansi1;
-    return h_flex().w_full().h(ROW).flex_none()
-      .when(this.selection && r.path===this.selection.path && (r.next??r.old)>=this.selection.line && (r.next??r.old)<=(this.selection.endLine??this.selection.line),e=>e.bg(t.selected))
+    const context = contextForRow(r, this.base?.source);
+    const selected = (this.selectionMode || this.selectedRow) && selectionCovers(this.selection, context);
+    return h_flex().id(`diff-hover-${index}`).w_full().h(height).items_start().flex_none()
+      .text_color("#00000000").hover(style => style.text_color(t.accent))
       .when(add || del, (e) => e.bg(tone + "40"))
       .child(div().w(40).flex_none().text_right().pr(6).text_color(del ? t.ansi1 : t.dim).when(del, (e) => e.bg(tone + "55").font_semibold()).child(r.old === undefined ? "" : String(r.old)))
       .child(div().w(40).flex_none().text_right().pr(6).text_color(add ? t.ansi2 : t.dim).when(add, (e) => e.bg(tone + "55").font_semibold()).child(r.next === undefined ? "" : String(r.next)))
       .child(div().w(18).flex_none().text_center().font_bold().text_color(tone).child(add ? "+" : del ? "−" : ""))
-      .child(this.badge(contextForRow(r,this.base?.source,this.commentSide),t))
-      .child(this.code(r.text, r.path, t,this.highlights(r.path,del?r.old:r.next,del?"old":"new"),tone));
+      .child(this.badge(context, t))
+      .child(codeLine(r.text, r.path, t, this.highlights(r.path, del ? r.old : r.next, del ? "old" : "new"), tone, breaks))
+      .when(selected, e => selectedDiffRow(e, t));
   }
 
-  half(cell, t, color, path, side) {
-    return h_flex().flex_1().min_w(0).h(ROW)
+  half(cell, t, color, path, side, height, breaks, wholeRowSelected, index) {
+    const selected = wholeRowSelected || (cell && (this.selectionMode || this.selectedRow) &&
+      selectionCovers(this.selection, { path, side, line: cell.n }));
+    return h_flex().id(`diff-hover-${index}-${side}`).flex_1().min_w(0).h(height).items_start()
+      .text_color("#00000000").hover(style => style.text_color(t.accent))
       .when(Boolean(cell?.change), (e) => e.bg(color + "40")).when(!cell, (e) => e.bg(t.raised + "88"))
-      .when(cell && this.selection && path===this.selection.path && side===this.selection.side && cell.n>=this.selection.line && cell.n<=(this.selection.endLine??this.selection.line),e=>e.bg(t.selected))
       .child(div().w(40).flex_none().text_right().pr(8).text_color(cell?.change ? color : t.dim).when(Boolean(cell?.change), (e) => e.bg(color + "55").font_semibold()).child(cell ? String(cell.n) : ""))
       .child(this.badge(cell?contextForRow({kind:"c",path,l:side==="old"?cell:null,r:side==="new"?cell:null,baseRevision:this.comparisonResolved?.sha,baseLabel:this.comparisonResolved?.name,oldContextUnavailable:Boolean(this.ignoreWhitespace)},this.base.source,side):null,t))
-      .child(cell ? this.code(cell.text,path,t,this.highlights(path,cell.n,side),color) : div().flex_1());
+      .child(cell ? codeLine(cell.text, path, t, this.highlights(path, cell.n, side), color, breaks) : div().flex_1())
+      .when(selected, e => selectedDiffRow(e, t));
   }
 
-  splitRow(r, t) {
+  splitRow(r, t, height, breaks, index) {
     if (r.kind === "file") return this.fileRow(r, t);
     if (r.kind === "@") return div().w_full().px(12).h(ROW).flex_none().truncate().bg(t.accent + "1c").text_color(t.accent).child(r.text);
-    return h_flex().w_full().h(ROW).flex_none().child(this.half(r.l, t, t.ansi1, r.path,"old")).child(div().w(1).h_full().flex_none().bg(t.border)).child(this.half(r.r, t, t.ansi2, r.path,"new"));
+    const wholeRowSelected = this.selectionMode === "row" && this.selection && selectionCovers(
+      this.selection, contextForRow(r, this.base?.source, this.selection.side));
+    return h_flex().w_full().h(height).flex_none()
+      .child(this.half(r.l, t, t.ansi1, r.path, "old", height, breaks?.[0], wholeRowSelected, index))
+      .child(div().w(1).h_full().flex_none().bg(t.border))
+      .child(this.half(r.r, t, t.ansi2, r.path, "new", height, breaks?.[1], wholeRowSelected, index));
   }
 
   fileRow(r, t) {
@@ -406,7 +517,7 @@ export class DiffTab {
     return h_flex().h(22).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(11).text_color(t.dim)
       .child(div().flex_none().child(what))
       .child(div().flex_1().min_w(0).truncate().child(this.base?.source?.root ?? ""))
-      .child(div().flex_none().child(this.error ? "" : this.loading ? "Loading…" : "Double-click a line: open in Neovim"));
+      .child(div().flex_none().child(this.error ? "" : this.loading ? "Loading…" : ""));
   }
 
   render(cx) {
@@ -423,18 +534,41 @@ export class DiffTab {
     const split = this.layout === "split";
     this.resizeRows();
     const list = v_virtual_list("scm-diff-rows", this.display.length, this.sizes, (i) => String(i),
-      (range) => this.display.slice(range.start, range.end).map((r, k) => this.rowWithComments(r,t,split,range.start+k)))
+      range => this.display.slice(range.start, range.end).map((row, offset) => {
+        const index = range.start + offset;
+        const slot = index % this.pointerRows.length;
+        const pointer = offset < this.pointerRows.length && this.pointerRows[slot];
+        if (pointer) this.pointerSlots[slot] = index;
+        return this.rowWithComments(row, t, split, index, pointer);
+      }))
       .on_item_click((key, cx) => this.rowClicked(Number(key), cx)).track_scroll(this.scroll).size_full();
     const contentWidth=split?Math.max(760,this.diffWidth*2):this.diffWidth;
-    const body=div().flex_1().min_w(0).min_h(0).relative()
-      .on_size_change((size,cx)=>{if(this.viewportWidth!==size.width){this.viewportWidth=size.width;this.commentPosition.width=Math.min(600,size.width);if(this.selectedRow)cx.notify();}})
+    const body=div().id("diff-viewport").flex_1().min_w(0).min_h(0).h_full().relative()
+      .on_size_change((size, cx) => {
+        const targetsChanged = this.resizePointerRows(size.height, cx);
+        const widthChanged = this.viewportWidth !== size.width;
+        this.viewportWidth = size.width;
+        this.commentPosition.width = Math.min(600, size.width);
+        if (targetsChanged || (widthChanged && (this.wrapLines || this.selectedRow))) cx.notify();
+      })
+      .on_mouse_up("left", () => { this.drag = null; })
+      .on_hover(hovered => { if (!hovered) this.drag = null; })
       .on_mouse_down("left",e=>{this.commentPosition=commentPlacement(this.contentLeft??0,e.bounds?.x??0,this.contentWidth??this.viewportWidth,this.viewportWidth);})
-      .font_family(settings().font_family??"JetBrains Mono").text_size(12)
-      .child(div().id(`scm-diff-x-${this.horizontalVersion}`).size_full().overflow_x_scrollbar().child(div().w_full().min_w(contentWidth).h_full()
+      .font_family(settings().font_family??"JetBrains Mono").text_size(FONT_SIZE)
+      .child(div().id(`scm-diff-x-${this.horizontalVersion}`).size_full().when(!this.wrapLines, e => e.overflow_x_scrollbar())
+        .child(div().size_full().when(!this.wrapLines, e => e.min_w(contentWidth))
         .on_size_change(size=>{this.contentWidth=size.width;})
         .on_mouse_down("left",e=>{
           this.contentLeft=e.bounds?.x??0;this.clicks=e.click_count??1;this.shift=Boolean(e.modifiers?.shift);
-          this.clickedSide=e.local_position&&this.contentWidth?(e.local_position.x<this.contentWidth/2?"old":"new"):null;
+          this.clickedX = e.local_position?.x;
+          const width = e.bounds?.width ?? this.contentWidth;
+          this.contentWidth = width;
+          this.clickedSide = this.clickedX === undefined ? null : this.clickedX < width / 2 ? "old" : "new";
+          this.startDrag(this.pointerIndex(e), e);
+        })
+        .on_mouse_move((e, cx) => {
+          const index = this.pointerIndex(e);
+          if (this.drag) this.moveDrag(index, e, cx);
         }).child(list)))
       .child(Scrollbar.vertical("scm-diff-rows").viewport_from_layout().absolute().inset_0());
     return shell([
@@ -442,7 +576,7 @@ export class DiffTab {
       this.searchOpen?searchBar(this,t):null,
       this.fetchError ? div().px(12).py(6).text_size(12).text_color(t.ansi1).child(this.fetchError) : null,
       this.error ? div().px(12).py(8).text_size(12).text_color(t.ansi1).child(this.error) : null,
-      !this.display.length && !this.loading && !this.error ? div().p(16).text_color(t.dim).child(this.mode==="all"?"No changes for this comparison":"No changes in this file") : h_flex().flex_1().min_h(0).child(this.mode==="all"&&this.showFiles?fileNavigator(this,t):div().w(0)).child(body),
+      !this.display.length && !this.loading && !this.error ? div().p(16).text_color(t.dim).child(this.mode==="all"?"No changes for this comparison":"No changes in this file") : h_flex().id("review-content").w_full().flex_1().min_h(0).items_stretch().overflow_hidden().child(this.mode==="all"&&this.showFiles?fileNavigator(this,t):div().w(0)).child(body),
       this.truncated ? div().px(12).py(4).border_t(1).border_color(t.border).text_size(11).text_color(t.dim).child(`Showing the first ${MAX_ROWS.toLocaleString()} lines`) : null,
     ].filter(Boolean));
   }

@@ -6,23 +6,26 @@ Formerly **Tabbed Changes**. The internal mod ID remains `tabbed-changes` for ex
 
 A VS Code-style Source Control mod with branch switching, explicit upstream push/pull controls, comparisons against `origin/main` or `origin/master`, tabbed diffs, and compact review comments on lines or ranges. Review a change, select the code, and send the original snippet with your instructions to an agent running in Herdr.
 
-![Source Control and tabbed diffs](preview.png)
+![All changes in Herdr Code Review with the changed-file navigator, Source Control, and a saved inline comment](preview.png)
 
 ## Review with your agent
 
 1. Open a changed file or a file tab.
-2. Click a code line or the **+** beside its number. For a range, click the first line, then **Shift-click** the last.
-3. Press **⌘⇧I** to open or focus the comment box beneath your selection.
-4. Write your feedback and click **Add comment**.
+2. Hover over a line and click the **+** beside its number to comment. Double-click a line to select the row and keep its **+** visible. In a diff, drag across code rows to select a range, or click the first line and **Shift-click** the last.
+3. With a line or range selected, click its **+** or press **⌘⇧I** to open or focus the comment box.
+4. Write your feedback and click **Save comment**. The card switches to your saved notes. Choose **New comment** to write another.
 5. Choose an idle agent in the same Herdr space, then click **Send to agent** on the saved comment.
+
+Open **Comments** at the bottom of Source Control to see every saved comment for the current repository. Each entry shows its file, line range, and code version, with actions to send it to an idle agent or remove it.
 
 The message includes the repository, file path, line range, old/new side, code snapshot, and your feedback. Sending submits it immediately. A successful send removes the comment; a failed send keeps it for retry. The mod never interrupts agents or forces past their prompts.
 
 ### Comments stay with the code
 
 - **Inline threads:** compact boxes beneath the selected code, in file views and inline or side-by-side diffs.
+- **Comment placement:** in a side-by-side diff, click the code or gutter on the version you want to comment on. Inline diffs attach comments on removed lines to the original code and other comments to the current code.
 - **Line ranges:** up to 500 consecutive lines in the same file and side. Ranges cannot cross hidden diff gaps.
-- **Gutter badges:** a dot and count identify lines with saved comments.
+- **Gutter badges:** a speech bubble identifies lines with saved comments. A strong accent band and solid edge mark the rows selected for a comment.
 - **Changed-code warnings:** amber badges and an **Outdated** label flag snapshots that no longer match the displayed code.
 - **Local persistence:** saved notes are scoped to repository and machine in Herdr shared state. Drafts survive switching lines within an open tab.
 - **Original context:** saved comments retain their original code and line numbers; they are not automatically relocated when code moves.
@@ -35,10 +38,10 @@ In **All changes**, the **Files** icon toggles a changed-file tree. Filter by fi
 
 - **Previous/next change:** toolbar arrows or **Alt+Up / Alt+Down** jump between diff hunks and wrap at the ends.
 - **Find:** **⌘F** opens case-insensitive text/path search within the loaded diff. Enter/Shift+Enter and the search arrows move between matching rows. Searching expands folded files; matches have an amber row marker.
-- **Words:** highlights the changed words inside paired removed/added lines. Work is bounded; unusually large lines use a whole-line highlight fallback.
+- **Words:** off by default. Turn it on to highlight changed words inside paired removed and added lines. Unusually large lines use a whole-line highlight.
 - **Ignore spaces:** hides whitespace-only changes, for both local and origin comparisons. Git's filtered context does not retain exact original whitespace, so original-side comments on unchanged context rows are unavailable in this mode. Turn it off to comment on those rows. Removed lines and current-side comments remain available.
-- **Context:** cycles between **3, 10, and 30** unchanged lines around each hunk. Existing selections/drafts are retained when the selected lines still exist in the same comparison.
-- **Horizontal scrolling:** inline and side-by-side views can pan across long lines. Comment boxes open within the visible viewport; **⌘⇧I** reveals/focuses the comment input.
+- **Show more lines:** expands the unchanged code around each change from three lines to ten. **Show fewer lines** returns to the compact view. Selections and drafts remain available when their lines are still visible.
+- **Wrap lines:** long lines fit the pane by default in diffs and file previews. In split view, each side wraps within its own column. Turn wrapping off to scroll horizontally. **⌘⇧I** reveals or focuses the comment input.
 
 Search and navigation respect the 8,000-row display limit. They do not edit files, fetch, switch branches or push.
 
@@ -80,20 +83,22 @@ Only the detected default branch is shown—there are no separate main/master bu
 | Upstream Git actions | Fetch, fast-forward Pull, current-branch Push, Publish branch, and ahead/behind counts. |
 | Remote comparison | Compare all committed and local changes directly against the last fetched `origin/main` or `origin/master`. |
 | Inline feedback | Comment on lines/ranges, show gutter badges and outdated warnings, and send context to a Herdr agent. |
-| Tabbed diffs | Single-click reuses a preview tab; double-click pins a separate tab. |
+| Tabbed diffs | Single-click reuses the **Changes** tab. Double-click pins a separate tab labeled with the filename. |
 | All changes | Review changed files in one scrolling view with collapsible file headers. |
 | Inline and side-by-side diffs | Old/new line numbers, added/deleted highlights, and syntax coloring. |
 | File views | Whole-file previews with added, modified, and deleted-line gutter markers. |
 | Neovim integration | Open a file at a selected line, using your own editor configuration, LSP, plugins, and keymaps. |
 | File-type icons | Material Icon Theme icons in the panel and tab headers. |
 
-![Diff tab](docs/screenshots/diff.png)
-![All changes](docs/screenshots/all-changes.png)
-![Side-by-side diff](docs/screenshots/side-by-side.png)
-![File view with Git gutter markers](docs/screenshots/file-gutter.png)
-![Neovim opened at the changed line](docs/screenshots/neovim.png)
+### Review views
 
-These screenshots show the Source Control views; the current mod also includes inline review comments.
+![Inline diff with lines 15–18 selected and the comment composer open](docs/screenshots/diff.png)
+
+![Side-by-side diff with wrapped code on both sides](docs/screenshots/side-by-side.png)
+
+![File preview with Git gutter markers and changed lines](docs/screenshots/file-gutter.png)
+
+[All changes screenshot](docs/screenshots/all-changes.png) · [Neovim example](docs/screenshots/neovim.png)
 
 ## Install
 
@@ -114,6 +119,8 @@ herdr-app do layout.clone '{"name":"main","as":"tabbed-changes"}'
 ```
 
 In `~/.config/herdr-app/layouts/tabbed-changes.json`, change the existing Changes block's `"mod": "changes"` to `"mod": "tabbed-changes"`. Keep the rest of the layout intact.
+
+If your layout uses a pane header, set its `header.content` to `{"mod":"tabbed-changes","props":{"role":"pane-header"}}` to show **Code Review** over review panes.
 
 The internal mod ID, folder, layout references, asset paths, and saved-state keys remain `tabbed-changes` for compatibility with existing installations.
 

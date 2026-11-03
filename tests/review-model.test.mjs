@@ -21,3 +21,12 @@ console.log('word diffs, navigation, search and file tree ok');
 assert.equal(typeof M.commentPlacement,'function');
 assert.deepEqual(M.commentPlacement(-1200,0,2000,500),{inset:1200,width:500});
 assert.deepEqual(M.commentPlacement(0,0,700,700),{inset:0,width:600});
+assert.deepEqual(M.wrapBreaks('const value = 42;', 8), [6, 14]);
+assert.deepEqual(M.wrapBreaks('abcdefghij', 4), [4, 8]);
+assert.deepEqual(M.wrapBreaks('a🐈b', 2), [1, 3]);
+assert.deepEqual(M.wrapBreaks('\tcode', 5), [1]);
+assert.equal(M.wrapBreaks('short', 8), null);
+assert.deepEqual(M.wrapTokens([{ text: 'abcde', kind: 'string', changed: true }], [2]), [
+  [{ text: 'ab', kind: 'string', changed: true }],
+  [{ text: 'cde', kind: 'string', changed: true }],
+]);

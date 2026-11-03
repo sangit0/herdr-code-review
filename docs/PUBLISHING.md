@@ -8,7 +8,7 @@ From the repository directory, run `npm test` and `herdr-app check mods/tabbed-c
 
 Keep the repository public and keep its `herdr-mod` topic. Herdr's discovery requirements are `mods/<name>/`, `RECIPE.md`, and `preview.png`, without a `layouts/` directory in the shared mod package. The website says community discovery runs within an hour; listing and image screening are controlled by Herdr.
 
-The existing screenshots show the Source Control views. Retake the preview when showcasing the new inline comments, using a disposable repository without private content.
+The main `preview.png` shows **All changes** with the file navigator, Source Control, and a saved inline comment. When refreshing screenshots, use changes and comments suitable for a public repository.
 
 ## Rename without disrupting installed mods
 

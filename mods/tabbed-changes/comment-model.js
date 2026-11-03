@@ -69,6 +69,10 @@ export async function sendAndRemove({note,read,write,...delivery}) {
   write(read().filter(n=>n.id!==note.id));
 }
 export const lineLabel = context => context?.endLine>context?.line ? `${context.line}-${context.endLine}` : String(context?.line??'');
+export function selectionCovers(selection, line) {
+  return Boolean(selection && line && selection.path === line.path && selection.side === line.side &&
+    line.line >= selection.line && line.line <= (selection.endLine ?? selection.line));
+}
 export function selectionForRows(rows,selection,source,side) {
   if(!selection || selection.source.root!==source?.root || (selection.source.on??null)!==(source?.on??null))return null;
   return rangeContext(selection,{...selection,line:selection.endLine??selection.line},rows.map(r=>contextForRow(r,source,side)).filter(Boolean));

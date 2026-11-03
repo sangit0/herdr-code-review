@@ -5,5 +5,5 @@
   "scripts": {
     "test": "node tests/git.test.mjs && node tests/comments.test.mjs && node tests/comparison.test.mjs && node tests/branches.test.mjs"
   },
-  "description": "Code review for Herdr with tabbed Git diffs, inline line and range comments, and feedback sent to coding agents."
+  "description": "VS Code-style Git and code review for Herdr: branch switching, upstream push/pull, origin comparisons, and inline feedback for coding agents."
 }

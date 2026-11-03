@@ -4,7 +4,7 @@ Formerly **Tabbed Changes**. The internal mod ID remains `tabbed-changes` for ex
 
 **Review code, leave inline feedback, and send it straight to your coding agent in [Herdr](https://herdr.dev).**
 
-A VS Code-style Source Control mod with tabbed diffs, an all-changes view, Git gutter markers, and compact comments on individual lines or ranges. Review a change, select the code, and send the original snippet with your instructions to an agent running in Herdr.
+A VS Code-style Source Control mod with branch switching, explicit upstream push/pull controls, comparisons against `origin/main` or `origin/master`, tabbed diffs, and compact review comments on lines or ranges. Review a change, select the code, and send the original snippet with your instructions to an agent running in Herdr.
 
 ![Source Control and tabbed diffs](preview.png)
 
@@ -46,7 +46,7 @@ Ahead/behind counts appear beside the branch name. Push and Pull recheck the cur
 
 ## Compare with origin/main or origin/master
 
-Use the **Compare origin** branch icon in the Source Control panel to review all differences from the remote default branch. The mod uses `origin/HEAD` when it points to `main` or `master`, otherwise prefers `origin/main` and falls back to `origin/master`.
+Use the **Compare origin** comparison icon in the Source Control panel to review all differences from the remote default branch. The mod uses `origin/HEAD` when it points to `main` or `master`, otherwise prefers `origin/main` and falls back to `origin/master`.
 
 In a diff tab, use **Local**, **origin/main**, or **origin/master** in the comparison bar. Remote comparison includes committed changes, staged and unstaged edits, deletions, and untracked-file previews. It compares the remote branch's last fetched commit directly with the current working tree; it does not use the branch's merge base. Double-click an All changes file header to drill into that file. Existing comments, line ranges and inline/side-by-side views remain available.
 
@@ -57,6 +57,10 @@ In a diff tab, use **Local**, **origin/main**, or **origin/master** in the compa
 | Feature | Behavior |
 |---|---|
 | Source Control panel | Merge, Staged, and Changes sections; file icons; added/deleted counts; stage, unstage, confirmed discard, commit, push, pull, and publish branch. |
+| Branch switching | Search local and remote branches; create tracking branches; protect conflicting local edits. |
+| Upstream Git actions | Fetch, fast-forward Pull, current-branch Push, Publish branch, and ahead/behind counts. |
+| Remote comparison | Compare all committed and local changes directly against the last fetched `origin/main` or `origin/master`. |
+| Inline feedback | Comment on lines/ranges, show gutter badges and outdated warnings, and send context to a Herdr agent. |
 | Tabbed diffs | Single-click reuses a preview tab; double-click pins a separate tab. |
 | All changes | Review changed files in one scrolling view with collapsible file headers. |
 | Inline and side-by-side diffs | Old/new line numbers, added/deleted highlights, and syntax coloring. |

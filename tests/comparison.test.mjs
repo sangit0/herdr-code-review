@@ -19,7 +19,7 @@ registerHooks({resolve(specifier,context,next){return ['herdr','gpui-kit','gpui-
  const h=globalThis.__comparisonHost;
  export const props=h.props,shared=h.shared,exec=h.exec,readTextFile=h.read;
  export const openOverlay=()=>{},spaces=()=>h.spaces?.()??[],setShared=(key,value)=>h.setShared?.(key,value);
- export const panes=()=>[],focused=()=>null,watchFolder=()=>{},theme=()=>({}),settings=()=>({}),run=()=>{},agents=()=>[],hc=()=>{};`};
+ export const panes=()=>[],focused=()=>null,watchFolder=()=>{},theme=()=>({}),settings=()=>({}),run=(...args)=>h.run?.(...args),agents=()=>[],hc=()=>{};`};
  if(url==='test:gpui-kit')return {format:'module',shortCircuit:true,source:'export class View {} export const div=()=>{},svg=()=>{},image=()=>{};'};
  if(url==='test:gpui-base')return {format:'module',shortCircuit:true,source:`
  export const v_flex=()=>{},h_flex=()=>{},Scrollbar={},v_virtual_list=()=>{},Textarea={},Input={};
@@ -98,6 +98,11 @@ try {
  review.navigateFile('file:tracked.txt',viewCx);assert.equal(review.display[review.cursor].path,'tracked.txt');assert.equal(review.dataStamp,gitBeforeNavigation);
  // Comment selections must survive context-only changes in the same review.
  const selectable=review.display.findIndex(r=>r.path==='tracked.txt'&&r.kind==='+');
+ const editorTabs=[];
+ globalThis.__comparisonHost.spaces=()=>[{id:'s',active:true,tabs:[]}];
+ globalThis.__comparisonHost.run=(command,args)=>{if(command==='tab.new')editorTabs.push(args);};
+ review.editorClick=true;review.rowClicked(selectable,viewCx);review.editorClick=false;
+ assert.deepEqual(editorTabs.map(tab=>tab.argv.slice(-3)),[['nvim','+2',join(root,'tracked.txt')]]);
  review.rowClicked(selectable,viewCx);const savedSelection={...review.selection};
  assert.equal(review.selectedRow, null, 'a single code click leaves the thread closed');
  review.clicks = 2;review.rowClicked(selectable,viewCx);review.clicks = 1;
@@ -127,7 +132,10 @@ try {
  review.setDiffOption('contextLines',3,viewCx);await drain();
  // File metadata polls should not rebuild an unchanged comment child.
  const file=new FileTab();file.init(viewCx);Object.assign(file,{file:join(root,'tracked.txt'),source:{root,on:null},watch:()=>{}});
- file.load(viewCx);await drain();file.selectLine(0,viewCx);
+ file.load(viewCx);await drain();
+ file.editorClick=true;file.selectLine(1,viewCx);file.editorClick=false;
+ assert.deepEqual(editorTabs.at(-1)?.argv.slice(-3),['nvim','+2',join(root,'tracked.txt')]);
+ file.selectLine(0,viewCx);
  assert.equal(file.selected, null, 'a file line click leaves the thread closed');
  file.clicks = 2;file.selectLine(0,viewCx);file.clicks = 1;
  assert.equal(file.selectionVisible, true);
@@ -150,6 +158,8 @@ try {
  review.startLayout='split';review.build();
  const paired=review.display.findIndex(row=>row.path==='contextspace.txt'&&row.l?.text==='old'&&row.r?.text==='new');
  assert.ok(paired>=0);
+ review.clickedSide='old';review.editorClick=true;review.rowClicked(paired,viewCx);review.editorClick=false;
+ assert.deepEqual(editorTabs.at(-1)?.argv.slice(-3),['nvim','+2',join(root,'contextspace.txt')]);
  review.clickedSide='old';review.rowClicked(paired,viewCx);
  assert.equal(review.selection.side,'old');
  assert.equal(review.selection.code,'old');

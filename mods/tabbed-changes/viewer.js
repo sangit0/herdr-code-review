@@ -136,6 +136,10 @@ export class FileTab {
   selectLine(i, cx) {
     const context = this.context(i);
     if (!context) return;
+    if (this.editorClick) {
+      openInEditor(cx, this.source, this.file, context.line);
+      return;
+    }
     this.handle.focus();
     const gutter = inCommentGutter(this.clickedX, GUTTER_START);
     if (!gutter || this.shift || !selectionCovers(this.selection, context)) {
@@ -175,6 +179,7 @@ export class FileTab {
           this.clickedX = e.local_position?.x;
           this.clicks = e.click_count;
           this.shift = Boolean(e.modifiers?.shift);
+          this.editorClick = Boolean(e.modifiers?.platform);
         }).child(list)))
       .child(Scrollbar.vertical("scm-file-rows").viewport_from_layout().absolute().inset_0());
   }

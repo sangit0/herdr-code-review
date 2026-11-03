@@ -89,7 +89,7 @@ The diff compares the working tree with the last commit shared by your branch an
 | All changes | Review changed files in one scrolling view with collapsible file headers. |
 | Inline and side-by-side diffs | Old/new line numbers, added/deleted highlights, and syntax coloring. |
 | File views | Whole-file previews with added, modified, and deleted-line gutter markers. |
-| Neovim integration | Open a file at a selected line, using your own editor configuration, LSP, plugins, and keymaps. |
+| Neovim integration | **⌘-click** a line in a diff or file preview to open it in your editor with your own configuration, LSP, plugins, and keymaps. In diffs, the shortcut opens lines that have a counterpart in the working file. |
 | File-type icons | Material Icon Theme icons in the panel and tab headers. |
 
 ### Review views

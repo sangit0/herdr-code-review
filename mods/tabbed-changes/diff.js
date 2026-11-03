@@ -302,7 +302,7 @@ export class DiffTab {
     this.drag = null;
     this.didDrag = false;
     const side = this.layout === "split" ? this.clickedSide : "new";
-    if (!side || this.clicks !== 1 || this.shift || this.commentGutterHit(index, side)) return;
+    if (!side || this.clicks !== 1 || this.shift || this.editorClick || this.commentGutterHit(index, side)) return;
     const anchor = contextForRow(this.display[index], this.base?.source, side);
     if (anchor) this.drag = { anchor, position: event.position, index, display: this.display };
   }
@@ -332,6 +332,11 @@ export class DiffTab {
     const double = this.clicks >= 2;
     const side = this.layout === "split" ? this.clickedSide : "new";
     const end = side ? contextForRow(row, this.base?.source, side) : null;
+    if (this.editorClick) {
+      const line = end && (row.r?.n ?? row.next);
+      if (line) openInEditor(cx, end.source, this.abs(row.path), line);
+      return;
+    }
     if (end) {
       this.handle.focus();
       const gutter = this.commentGutterHit(i, side);
@@ -569,6 +574,7 @@ export class DiffTab {
         .on_size_change(size=>{this.contentWidth=size.width;})
         .on_mouse_down("left",e=>{
           this.contentLeft=e.bounds?.x??0;this.clicks=e.click_count??1;this.shift=Boolean(e.modifiers?.shift);
+          this.editorClick = Boolean(e.modifiers?.platform);
           this.clickedX = e.local_position?.x;
           const width = e.bounds?.width ?? this.contentWidth;
           this.contentWidth = width;

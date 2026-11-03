@@ -3,6 +3,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
 import { props, exec, readTextFile, theme, settings } from "herdr";
+import { InlineComments, lineComments, INLINE_HEIGHT } from "./comments.js";
 import * as G from "./git.js";
 import { toolButton, codeLine, fileIcon } from "./ui.js";
 import { openInEditor, showDiff } from "./tabs.js";
@@ -14,7 +15,8 @@ export class FileTab {
     const p = props() ?? {};
     this.file = typeof p.file === "string" ? p.file : null;
     this.source = { root: p.root ?? null, on: p.on ?? null };
-    this.line = p.line ?? null;
+    this.line = p.line ?? null; this.selected = null;
+    this.thread = cx.new(InlineComments);
     this.ready = false; this.lines = []; this.marks = {}; this.deletedBefore = new Set(); this.changed = 0;
     this.loading = Boolean(this.file);
     this.error = this.file ? null : "No file was provided";
@@ -58,18 +60,33 @@ export class FileTab {
     const n = i + 1, mark = this.marks[n], tone = mark === "add" ? t.ansi2 : mark === "mod" ? t.ansi4 : null;
     const up = this.deletedBefore.has(n), below = n === this.lines.length && this.deletedBefore.has(n + 1);
     return h_flex().w_full().h(ROW).flex_none().relative()
+      .when(this.selected === i, e => e.bg(t.selected))
       .when(Boolean(tone), (e) => e.bg(tone + "26"))
       .child(div().w(4).h_full().flex_none().when(Boolean(tone), (e) => e.bg(tone)))
-      .child(div().w(48).flex_none().text_right().pr(10).text_color(tone ?? t.dim).when(Boolean(tone), (e) => e.font_semibold()).child(String(n)))
+      .child(div().w(48).flex_none().text_right().pr(10).text_color(tone ?? t.dim).when(Boolean(tone), (e) => e.font_semibold()).whitespace_nowrap().child(String(n)))
+      .child(div().w(18).flex_none().text_color(t.accent).child("+"))
       .child(codeLine(this.lines[i] || " ", this.file, t))
       .when(up, (e) => e.child(div().absolute().top(0).left(0).w_full().h(2).bg(t.ansi1)))
       .when(below, (e) => e.child(div().absolute().bottom(0).left(0).w_full().h(2).bg(t.ansi1)));
   }
 
+  context(i) {
+    const path = this.rel();
+    return path && i !== null ? {source:this.source,path,line:i+1,side:"new",code:this.lines[i]} : null;
+  }
+  selectLine(i, cx) {
+    if (i === this.selected) { this.selected = null; cx.notify(); return; }
+    this.selected = i; this.line = i + 1;
+    this.thread.set_props({context:this.context(i)}); cx.notify();
+  }
+  close() { this.thread.release(); }
+
   changesView(t) {
     const width = Math.max(400, Math.max(...this.lines.map((l) => l.length), 0) * 7.4 + 90);
-    const list = v_virtual_list("scm-file-rows", this.lines.length, ROW, (i) => String(i),
-      (range) => { const out = []; for (let i = range.start; i < range.end; i++) out.push(this.row(i, t)); return out; }).size_full();
+    const list = v_virtual_list("scm-file-rows", this.lines.length, this.lines.map((_l,i)=>ROW+(this.selected===i?INLINE_HEIGHT:lineComments(this.context(i)).length?22:0)), (i) => String(i),
+      (range) => { const out = []; for (let i = range.start; i < range.end; i++) out.push(v_flex().w_full().flex_none().child(this.row(i, t))
+        .when(this.selected===i,e=>e.child(this.thread))
+        .when(this.selected!==i && lineComments(this.context(i)).length>0,e=>e.child(div().h(22).px(54).text_color(t.accent).child(`${lineComments(this.context(i)).length} comment(s) · click line to view`)))); return out; }).on_item_click((key, cx) => { this.selectLine(Number(key), cx); }).size_full();
     return div().flex_1().min_h(0).relative().font_family(settings().font_family ?? "JetBrains Mono").text_size(13)
       .child(div().id("scm-file-x").size_full().overflow_x_scrollbar().child(div().w_full().min_w(width).h_full().child(list)))
       .child(Scrollbar.vertical("scm-file-rows").viewport_from_layout().absolute().inset_0());

@@ -1,1 +1,8 @@
-{ "name": "herdr-tabbed-changes", "private": true, "type": "module", "scripts": { "test": "node tests/git.test.mjs" } }
+{
+  "name": "herdr-tabbed-changes",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/git.test.mjs && node tests/comments.test.mjs"
+  }
+}

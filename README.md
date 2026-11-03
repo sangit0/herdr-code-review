@@ -49,3 +49,9 @@ Whole-file staging only; 1,000 files in the panel; 8,000 diff rows and 40 untrac
 
 ## Credits & licence
 MIT (see `LICENSE`). File icons are from [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) (MIT, `mods/tabbed-changes/icons/files/LICENSE.txt`). Other icons are Lucide-style SVGs (ISC). Inspired by [herdr-git-changes](https://github.com/aBER0724/herdr-git-changes) and Zed's git panel; no code copied.
+
+## Review comments for agents
+
+Click a code line or the **+** beside its line number in a diff or open-file tab. A comment box opens **directly beneath that line**, alongside the code. Write your note and **Save comment**. Choose an idle Herdr agent in the same space, then use **Send line + comment** on that note. It sends the file path, line number, old/new side, code snapshot and your comment together, and submits immediately.
+
+Saved comments stay attached to their individual lines in Herdr's local shared state, scoped to repository and machine. Click a commented line to reopen its thread. Sent notes remain visible; failed sends remain pending. Unfinished drafts survive switching lines within the same open tab. In side-by-side diffs, click the relevant half or choose Old side / New side. Line numbers and code are snapshots; the agent must check the current file. Single lines only. Agents must run inside Herdr; this does not send to an external Codex desktop chat. No agents are interrupted or forced past a prompt.

@@ -1,6 +1,6 @@
 # Publishing and updates
 
-This project is published at https://github.com/sangit0/herdr-tabbed-changes.
+This project is published at https://github.com/sangit0/herdr-code-review.
 
 ## Publish an update
 

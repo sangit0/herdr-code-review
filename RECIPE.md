@@ -1,4 +1,4 @@
-# Tabbed Changes
+# Herdr Code Review
 
 A Source Control and code-review mod: tabbed diffs, whole-change multibuffer, file views, Neovim, and compact inline feedback on lines or ranges that can be sent to Herdr agents. ![Tabbed Changes](preview.png)
 

@@ -1,4 +1,4 @@
-// Tabbed Changes: a VS Code-style Source Control panel whose files open in tabs.
+// Herdr Code Review: a VS Code-style Source Control panel whose files open in tabs.
 // One mod, three roles (props.role): the panel (default), the diff tab, and the file tab.
 import { View } from "gpui-kit";
 import { props } from "herdr";

@@ -1,4 +1,6 @@
-# Tabbed Changes
+# Herdr Code Review
+
+Formerly **Tabbed Changes**. The internal mod ID remains `tabbed-changes` for existing installations.
 
 **Review code, leave inline feedback, and send it straight to your coding agent in [Herdr](https://herdr.dev).**
 

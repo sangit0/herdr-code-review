@@ -2,7 +2,7 @@
 import { View, div } from 'gpui-kit';
 import { v_flex, h_flex, TextareaState, Textarea } from 'gpui-base';
 import { spaces, agents, shared, setShared, theme, hc } from 'herdr';
-import { makeComment, forSource, forLine, deliverComments } from './comment-model.js';
+import { makeComment, forSource, forLine, sendAndRemove, isOutdated, lineLabel } from './comment-model.js';
 
 const KEY = 'tabbed-changes.comments.v1';
 const allNotes = () => shared(KEY) ?? [];
@@ -17,16 +17,19 @@ const button = (id, text, t, action, active = false) => div().id(id).px(8).py(3)
 export class InlineComments extends View {
   init(p, cx) {
     this.context=p?.context ?? null; this.space=p?.space ?? spaces().find(s=>s.active)?.id;
+    this.references=p?.references ?? [];
     this.drafts = {};
     this.target=null; this.busy=false; this.error=null; this.note=null;
     this.input=TextareaState.new({placeholder:'Comment on this line…',rows:2});
     this.input.on('change',(_e,cx)=>{this.drafts[this.draftKey()]=this.input.value();cx.notify();});
   }
-  draftKey() { return JSON.stringify(this.context); }
+  draftKey() { const c=this.context; return JSON.stringify(c?[c.source,c.path,c.line,c.endLine??c.line,c.side]:null); }
   update(p) {
     this.drafts[this.draftKey()]=this.input.value();
     this.context=p?.context ?? null; this.space=p?.space ?? this.space;
+    this.references=p?.references ?? this.references;
     this.error=null; this.note=null; this.input.set_value(this.drafts[this.draftKey()] ?? '');
+    if(p?.focus)this.input.focus();
   }
   save(cx) {
     if(this.busy)return;
@@ -42,9 +45,7 @@ export class InlineComments extends View {
     this.busy=true; this.error=null; this.note=null; cx.notify();
     cx.spawn(async cx=>{
       try {
-        await deliverComments({notes:[note],target,space:this.space,agents:agents(),send:args=>hc(args)});
-        const sentAt=Date.now();
-        setShared(KEY,allNotes().map(n=>n.id===note.id?{...n,sentAt,sentTo:target}:n));
+        await sendAndRemove({note,target,space:this.space,agents:agents(),send:args=>hc(args),read:allNotes,write:next=>setShared(KEY,next)});
         this.note=`Sent line and comment to ${target}.`;
       } catch(e) { this.error=String(e.message ?? e); }
       finally { this.busy=false; cx.notify(); }
@@ -57,10 +58,11 @@ export class InlineComments extends View {
       .bg(t.surface).border_l(2).border_color(t.accent).text_color(t.foreground).text_size(12)
       .on_mouse_down('left',(_e,cx)=>cx.stop_propagation())
       .child(h_flex().h(18).flex_none().items_center().justify_between()
-        .child(div().font_semibold().text_color(t.muted).child(context?`Line ${context.line} · ${context.side === 'old' ? 'original' : 'current'}`:'Comment'))
+        .child(div().font_semibold().text_color(t.muted).child(context?`Line ${lineLabel(context)} · ${context.side === 'old' ? 'original' : 'current'}`:'Comment'))
         .child(div().text_size(10).text_color(t.dim).child('Click line to collapse')))
       .when(notes.length>0,el=>el.child(v_flex().id('line-thread').h(72).flex_none().gap(4).overflow_y_scrollbar()
         .children(notes.map(n=>v_flex().px(6).py(3).gap(2).rounded(3).bg(t.raised)
+          .when(isOutdated(n,this.references),el=>el.child(div().text_size(10).text_color(t.ansi3).child("Outdated · code changed since this comment")))
           .child(div().child(n.text))
           .child(h_flex().gap(6).items_center()
             .child(n.sentAt?div().text_size(10).text_color(t.ansi2).child(`Sent to ${n.sentTo}`):button(`line-send-${n.id}`,this.busy?'Sending…':'Send to agent',t,cx=>this.send(n,cx),true))
@@ -73,6 +75,6 @@ export class InlineComments extends View {
           .when(!targets.length,el=>el.child(div().text_size(11).text_color(t.dim).child('No agent in this space')))))
         .child(button('line-comment-save','Add comment',t,cx=>this.save(cx),true)))
       .when(Boolean(this.error || this.note),el=>el.child(div().h(16).flex_none().text_size(11).truncate().text_color(this.error?t.ansi1:t.ansi2).child(this.error || this.note)))
-      .when(!this.error && !this.note,el=>el.child(div().h(16).flex_none().text_size(10).text_color(t.dim).child('Send includes the code line and submits immediately.')));
+      .when(!this.error && !this.note,el=>el.child(div().h(16).flex_none().text_size(10).text_color(t.dim).child('⌘⇧I comment · Shift-click to select a range')));
   }
 }

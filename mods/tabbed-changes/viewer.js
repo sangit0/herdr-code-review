@@ -4,6 +4,7 @@ import { div } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
 import { props, exec, readTextFile, theme, settings } from "herdr";
 import { InlineComments, lineComments, inlineHeight } from "./comments.js";
+import { rangeContext, isOutdated } from "./comment-model.js";
 import * as G from "./git.js";
 import { toolButton, codeLine, fileIcon } from "./ui.js";
 import { openInEditor, showDiff } from "./tabs.js";
@@ -15,30 +16,41 @@ export class FileTab {
     const p = props() ?? {};
     this.file = typeof p.file === "string" ? p.file : null;
     this.source = { root: p.root ?? null, on: p.on ?? null };
-    this.line = p.line ?? null; this.selected = null;
+    this.line = p.line ?? null; this.selected = null; this.anchor = null; this.selection = null; this.shift = false;
+    this.handle=cx.focus_handle();
     this.thread = cx.new(InlineComments);
     this.ready = false; this.lines = []; this.marks = {}; this.deletedBefore = new Set(); this.changed = 0;
     this.loading = Boolean(this.file);
     this.error = this.file ? null : "No file was provided";
     if (this.file) this.load(cx);
+    cx.timer.every(3000,cx=>this.load(cx));
   }
 
   rel() { const r = this.source.root; return r && this.file.startsWith(`${r}/`) ? this.file.slice(r.length + 1) : null; }
 
   // The file's text, then its changes against HEAD (an untracked file is all added).
   load(cx) {
+    if(this.inflight)return;
+    this.inflight=true;
     const file = this.file, on = this.source.on, rel = this.rel();
     cx.spawn(async (cx) => {
       try {
         const text = await readTextFile(file, { on });
-        if (text === null) { this.error = "This file is no longer available"; return; }
-        if (text.includes("\0")) { this.error = "Binary file · no text preview"; return; }
+        if (text === null) { this.ready=false; this.error = "This file is no longer available"; return; }
+        if(text===this.loadedText)return;
+        this.loadedText=text;
+        if (text.includes("\0")) { this.ready=false; this.error = "Binary file · no text preview"; return; }
         const shown = text.length > 400000 ? text.slice(0, 400000) + "\n… (file truncated)" : text;
         this.lines = shown.replace(/\n$/, "").split("\n").slice(0, MAX_LINES);
+        this.marks={}; this.deletedBefore=new Set(); this.changed=0;
         if (rel) await this.loadMarks(rel, on, this.lines.length);
-        this.ready = true;
+        this.error=null; this.ready = true;
+        if(this.selected!==null){
+          this.selection=rangeContext(this.selection,{...this.selection,line:this.selection.endLine??this.selection.line},this.references()) ?? this.context(Math.min(this.selected,this.lines.length-1));
+          this.selected=(this.selection.endLine??this.selection.line)-1;this.updateThread(false);
+        }
       } catch (e) { this.error = String(e); }
-      finally { this.loading = false; cx.notify(); }
+      finally { this.inflight=false; this.loading = false; cx.notify(); }
     });
   }
 
@@ -58,13 +70,14 @@ export class FileTab {
 
   row(i, t) {
     const n = i + 1, mark = this.marks[n], tone = mark === "add" ? t.ansi2 : mark === "mod" ? t.ansi4 : null;
+    const notes=lineComments(this.context(i));
     const up = this.deletedBefore.has(n), below = n === this.lines.length && this.deletedBefore.has(n + 1);
     return h_flex().w_full().h(ROW).flex_none().relative()
-      .when(this.selected === i, e => e.bg(t.selected))
+      .when(this.selection && n>=this.selection.line && n<=(this.selection.endLine??this.selection.line), e => e.bg(t.selected))
       .when(Boolean(tone), (e) => e.bg(tone + "26"))
       .child(div().w(4).h_full().flex_none().when(Boolean(tone), (e) => e.bg(tone)))
       .child(div().w(48).flex_none().text_right().pr(10).text_color(tone ?? t.dim).when(Boolean(tone), (e) => e.font_semibold()).whitespace_nowrap().child(String(n)))
-      .child(div().w(18).flex_none().text_color(t.accent).child("+"))
+      .child(div().w(22).flex_none().text_color(notes.some(note=>isOutdated(note,this.references()))?t.ansi3:t.accent).child(notes.length?`●${notes.length}`:"+"))
       .child(codeLine(this.lines[i] || " ", this.file, t))
       .when(up, (e) => e.child(div().absolute().top(0).left(0).w_full().h(2).bg(t.ansi1)))
       .when(below, (e) => e.child(div().absolute().bottom(0).left(0).w_full().h(2).bg(t.ansi1)));
@@ -74,19 +87,33 @@ export class FileTab {
     const path = this.rel();
     return path && i !== null ? {source:this.source,path,line:i+1,side:"new",code:this.lines[i]} : null;
   }
+  references() { return this.lines.map((_text,i)=>this.context(i)); }
+  updateThread(focus) {
+    this.thread.set_props({context:this.selection,references:this.references(),focus});
+  }
   selectLine(i, cx) {
-    if (i === this.selected) { this.selected = null; cx.notify(); return; }
-    this.selected = i; this.line = i + 1;
-    this.thread.set_props({context:this.context(i)}); cx.notify();
+    this.handle.focus();
+    if (!this.shift && i === this.selected) { this.selected=null; cx.notify(); return; }
+    if(!this.shift || this.anchor===null)this.anchor=i;
+    this.selection=rangeContext(this.context(this.anchor),this.context(i),this.references());
+    if(!this.selection){this.anchor=i;this.selection=this.context(i);}
+    this.selected=Math.max(this.anchor,i);this.line=i+1;
+    this.updateThread(false);cx.notify();
+  }
+  openComment(cx) {
+    if(!this.selection){this.anchor=Math.max(0,(this.line??1)-1);this.selection=this.context(this.anchor);}
+    if(!this.selection)return;
+    this.selected=(this.selection.endLine??this.selection.line)-1;
+    this.updateThread(true);cx.notify();
   }
   close() { this.thread.release(); }
 
   changesView(t) {
     const width = Math.max(400, Math.max(...this.lines.map((l) => l.length), 0) * 7.4 + 90);
-    const list = v_virtual_list("scm-file-rows", this.lines.length, this.lines.map((_l,i)=>ROW+(this.selected===i?inlineHeight(this.context(i)):lineComments(this.context(i)).length?22:0)), (i) => String(i),
+    const list = v_virtual_list("scm-file-rows", this.lines.length, this.lines.map((_l,i)=>ROW+(this.selected===i?inlineHeight(this.selection):0)), (i) => String(i),
       (range) => { const out = []; for (let i = range.start; i < range.end; i++) out.push(v_flex().w_full().flex_none().child(this.row(i, t))
         .when(this.selected===i,e=>e.child(this.thread))
-        .when(this.selected!==i && lineComments(this.context(i)).length>0,e=>e.child(div().h(22).px(54).text_color(t.accent).child(`${lineComments(this.context(i)).length} comment(s) · click line to view`)))); return out; }).on_item_click((key, cx) => { this.selectLine(Number(key), cx); }).size_full();
+); return out; }).on_item_click((key, cx) => { this.selectLine(Number(key), cx); }).size_full();
     return div().flex_1().min_h(0).relative().font_family(settings().font_family ?? "JetBrains Mono").text_size(13)
       .child(div().id("scm-file-x").size_full().overflow_x_scrollbar().child(div().w_full().min_w(width).h_full().child(list)))
       .child(Scrollbar.vertical("scm-file-rows").viewport_from_layout().absolute().inset_0());
@@ -95,7 +122,9 @@ export class FileTab {
   render(cx) {
     const t = theme(), has = this.changed > 0 || this.deletedBefore.size > 0, rel = this.rel();
     const name = G.basename(this.file ?? "File");
-    return v_flex().id("scm-file").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground)
+    return v_flex().id("scm-file").track_focus(this.handle)
+      .on_mouse_down("left",e=>{this.shift=Boolean(e.modifiers?.shift);})
+      .on_key_down((e,cx)=>{if(e.keystroke==="cmd-shift-i"){cx.stop_propagation();this.openComment(cx);}}).size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground)
       .child(h_flex().h(44).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
         .child(fileIcon(this.file ?? "", 18))
         .child(div().font_bold().text_size(15).flex_none().child(name))

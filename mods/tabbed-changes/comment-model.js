@@ -6,7 +6,7 @@ export function contextForRow(row, source, side = 'new') {
     return cell?.n ? { source, path: row.path, line: cell.n, side, code: cell.text } : null;
   }
   if (!['+', '-', ' '].includes(row.kind)) return null;
-  const old = row.kind === '-';
+  const old = row.kind === '-' || (row.kind === ' ' && side === 'old');
   const line = old ? row.old : row.next;
   return Number.isInteger(line) && line > 0 ? { source, path: row.path, line, side: old ? 'old' : 'new', code: row.text } : null;
 }
@@ -20,7 +20,7 @@ export const forSource = (notes, source) => notes.filter(n => n.source.root === 
 export function formatComments(notes) {
   if (!notes.length) throw new Error('Select at least one saved comment.');
   return ['Please address these code review comments. Code and line numbers are snapshots from when each comment was saved; verify them against the current files.',
-    ...notes.map(n => `\nRepository: ${n.source.root}${n.source.on ? ` (machine: ${n.source.on})` : ''}\n${n.path}:${n.line} (${n.side})\nCode snapshot: ${JSON.stringify(n.code)}\nComment: ${n.text}`)].join('\n');
+    ...notes.map(n => `\nRepository: ${n.source.root}${n.source.on ? ` (machine: ${n.source.on})` : ''}\n${n.path}:${lineLabel(n)} (${n.side})\nCode snapshot: ${JSON.stringify(n.code)}\nComment: ${n.text}`)].join('\n');
 }
 export async function deliverComments({ notes, target, space, agents, send }) {
   const agent = agents.find(a => a.address === target && a.space === space);
@@ -32,7 +32,7 @@ export async function deliverComments({ notes, target, space, agents, send }) {
   if (result.code !== 0) throw new Error(result.stderr?.trim() || result.stdout?.trim() || 'The agent did not accept the comments.');
   return result;
 }
-export const forLine = (notes, context) => context ? forSource(notes, context.source).filter(n=>n.path===context.path && n.line===context.line && n.side===context.side) : [];
+export const forLine = (notes, context) => context ? forSource(notes, context.source).filter(n=>n.path===context.path && n.line<=context.line && (n.endLine??n.line)>=context.line && n.side===context.side) : [];
 // A refresh may replace row objects. Retain the inline editor only at an exact snapshot match.
 export function findMatchingRow(rows, context) {
   if (!context) return null;
@@ -40,4 +40,27 @@ export function findMatchingRow(rows, context) {
     const next=contextForRow(row,context.source,context.side);
     return next && next.path===context.path && next.line===context.line && next.side===context.side && next.code===context.code;
   }) ?? null;
+}
+const sameFile = (a,b) => a && b && a.path===b.path && a.side===b.side && a.source.root===b.source.root && (a.source.on??null)===(b.source.on??null);
+export function rangeContext(start,end,contexts) {
+  if(!sameFile(start,end))return null;
+  const line=Math.min(start.line,end.line), endLine=Math.max(start.line,end.line);
+  if(endLine-line>=500)return null;
+  const rows=new Map(contexts.filter(c=>sameFile(c,start)).map(c=>[c.line,c.code]));
+  const code=[];
+  for(let i=line;i<=endLine;i++){if(!rows.has(i))return null;code.push(rows.get(i));}
+  return {...start,line,endLine,code:code.join('\n')};
+}
+export function isOutdated(note,contexts) {
+  const current=rangeContext(note,{...note,line:note.endLine??note.line},contexts);
+  return !current || current.code!==note.code;
+}
+export async function sendAndRemove({note,read,write,...delivery}) {
+  await deliverComments({...delivery,notes:[note]});
+  write(read().filter(n=>n.id!==note.id));
+}
+export const lineLabel = context => context?.endLine>context?.line ? `${context.line}-${context.endLine}` : String(context?.line??'');
+export function selectionForRows(rows,selection,source,side) {
+  if(!selection || selection.source.root!==source?.root || (selection.source.on??null)!==(source?.on??null))return null;
+  return rangeContext(selection,{...selection,line:selection.endLine??selection.line},rows.map(r=>contextForRow(r,source,side)).filter(Boolean));
 }

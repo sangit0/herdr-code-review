@@ -1,12 +1,12 @@
 // The diff tab. One file (VS Code's diff editor) or every changed file stacked in one scrolling
 // view (Zed's multibuffer), inline or side by side, with line and range comments.
 import { View, div } from "gpui-kit";
-import { v_flex, h_flex, Scrollbar, v_virtual_list, InputState, VirtualListScrollHandle } from "gpui-base";
+import { v_flex, h_flex, Scrollbar, v_virtual_list, InputState, VirtualListScrollHandle, h_resizable, resizable_panel } from "gpui-base";
 import { props, spaces, panes, focused, shared, setShared, exec, readTextFile, watchFolder, theme, settings } from "herdr";
-import { InlineComments, lineComments, INLINE_COMMENT_HEIGHT } from "./comments.js";
+import { InlineComments, lineComments, INLINE_COMMENT_HEIGHT, CLOSE_THREAD_KEY } from "./comments.js";
 import { contextForRow, rangeContext, isOutdated, selectionForRows, selectionCovers, lineLabel } from "./comment-model.js";
 import { resolveReviewBase, comparisonArgs } from "./comparison.js";
-import { diffFlags,wordChanges,changedTargets,searchRows,stepTarget,fileTree,commentPlacement,wrapBreaks,wrapColumns } from "./review-model.js";
+import { diffFlags,wordChanges,changedTargets,searchRows,stepTarget,fileTree,commentPlacement,wrapBreaks,wrapColumns,hangFor } from "./review-model.js";
 import { Coalescer, Memo } from "./read-cache.js";
 import { readGit, invalidateReads, invalidateRepository, REPOSITORY_EVENT } from "./repository.js";
 import * as G from "./git.js";
@@ -29,9 +29,9 @@ export class DiffTab {
     this.startLayout = p.layout ?? null; // "split" | "inline": this tab starts in that layout
     this.collapsed = new Set(); this.display = []; this.sizes = []; this.files = []; this.clicks = 1;
     this.handle=cx.focus_handle();this.handle.focus(); this.anchor=null; this.selection=null; this.shift=false; this.refs={old:[],new:[]};
-    this.selectedRow = null; this.selectionMode = null; this.thread = cx.new(InlineComments);
+    this.selectedRow = null; this.selectionMode = null; this.thread = cx.new(InlineComments); this.closeSeen = shared(CLOSE_THREAD_KEY)?.at ?? 0;
     this.refreshQueue=new Coalescer();this.dataStamp=null;
-    this.contextLines=3;this.ignoreWhitespace=false;this.wordHighlight=false;this.wordCache=new Memo(256);this.wordPairs=new Map();
+    this.contextLines=3;this.ignoreWhitespace=false;this.wordHighlight=true;this.wordCache=new Memo(256);this.wordPairs=new Map();
     this.commentPosition={inset:0,width:600};this.viewportWidth=600;this.horizontalVersion=0;
     this.wrapLines = true;
     this.pointerRows = [];
@@ -57,6 +57,7 @@ export class DiffTab {
     this.fileInput=InputState.new({placeholder:"Filter files…"});
     this.fileInput.on("change",(_e,cx)=>{this.fileQuery=this.fileInput.value();this.treeNodes=fileTree(this.files,this.fileQuery,this.folderCollapsed);cx.notify();});
     this.diffWidth = 400; this.truncated = false;
+    this.hx = 0; // side-by-side, wrap off: shared horizontal offset (px) of both columns' code
     cx.timer.every(10000, (cx) => this.load(cx, true));
     this.claim();
   }
@@ -257,18 +258,11 @@ export class DiffTab {
       finally{this.fetching=false;cx.notify();}
     });
   }
-  comparisonBar(t) {
-    if(this.comparison==="local")return null;
-    const label=this.comparisonResolved?.name??(this.comparison==="origin"?"origin default branch":this.comparison);
-    return h_flex().h(28).flex_none().px(12).gap(6).items_center()
-      .child(icon("columns",12).text_color(t.muted))
-      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(`Branch changes vs ${label}`))
-      .child(toolButton("compare-local","files","Local changes",t,cx=>this.setComparison("local",cx)))
-      .child(toolButton("compare-fetch","refresh",this.fetching?"Fetching…":"Fetch origin",t,cx=>this.fetchOrigin(cx)));
-  }
+  // Merged into header(): "N files · vs origin/master" plus Local changes / Fetch.
+  comparisonBar() { return null; }
 
   // --- actions ----------------------------------------------------------------------------------
-  setLayout(layout, cx) { this.startLayout = null; setShared(LAYOUT_KEY, layout); this.build(); cx.notify(); }
+  setLayout(layout, cx) { this.hx = 0; this.startLayout = null; setShared(LAYOUT_KEY, layout); this.build(); cx.notify(); }
 
   setMode(mode, cx, file) {
     this.modeOverride = mode;
@@ -404,7 +398,7 @@ export class DiffTab {
       this.wrapSplit = split;
       this.rowWraps = this.display.map(row => {
         if (row.kind === "file" || row.kind === "@") return null;
-        return split ? [wrapBreaks(row.l?.text, columns), wrapBreaks(row.r?.text, columns)] : [wrapBreaks(row.text, columns)];
+        return split ? [wrapBreaks(row.l?.text, columns, hangFor(row.l?.text)), wrapBreaks(row.r?.text, columns, hangFor(row.r?.text))] : [wrapBreaks(row.text, columns, hangFor(row.text))];
       });
       this.baseSizes = this.display.map((row, index) => {
         if (row.kind === "file") return FILE_ROW;
@@ -417,15 +411,47 @@ export class DiffTab {
     this.sizedBase=this.baseSizes;this.sizedRow=this.selectedRow;this.sizedHeight=height;
     this.sizes=this.selectedRow?this.baseSizes.map((size,i)=>size+(this.display[i]===this.selectedRow?height:0)):this.baseSizes;
   }
-  commentBar(t) {
-    const hint = this.ignoreWhitespace && this.layout === "split"
+  // Text to copy: the selected line range, else the current row's code (new side in split view).
+  copyText() {
+    if (this.selection?.code) return this.selection.code;
+    const r = this.display[this.cursor];
+    if (!r || r.kind === "file" || r.kind === "@") return null;
+    return r.text ?? r.r?.text ?? r.l?.text ?? null;
+  }
+  copyKey() { const s = this.selection; return s ? `${s.path}:${s.side}:${s.line}-${s.endLine ?? s.line}` : null; }
+  copySelection(cx) {
+    const text = this.copyText();
+    if (text === null || text === undefined) return false;
+    cx.write_to_clipboard(text);
+    this.copiedFor = this.copyKey() ?? "row";
+    cx.notify();
+    return true;
+  }
+
+  commentHint() {
+    return this.ignoreWhitespace && this.layout === "split"
       ? "Show spaces to comment on unchanged lines on the left"
-      : "Hover for + · Drag or Shift-click to select lines · ⌘⇧I to comment";
+      : "Hover for + · Drag or Shift-click to select lines · ⌘C to copy · ⌘⇧I to comment";
+  }
+  commentBar(t, cx) {
+    const hint = this.commentHint();
     const selected = this.selection && (this.selectionMode || this.selectedRow);
+    if (!selected) return null;
     return h_flex().h(22).px(12).gap(10).flex_none().items_center().text_size(11)
       .when(selected, e => e.child(div().flex_none().font_semibold().text_color(t.accent)
         .child(`Selected: ${lineLabel(this.selection)} · ${this.selection.side === "old" ? "original" : "current"}`)))
+      .when(selected, e => e.child(toolButton("copy-selection", this.copiedFor === this.copyKey() ? "check" : "copy",
+        this.copiedFor === this.copyKey() ? "Copied" : "Copy", t, cx => this.copySelection(cx), { active: this.copiedFor === this.copyKey() })))
       .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(hint));
+  }
+  // Where the inline comment card starts: under the "+" of the side being commented (right column in split view),
+  // pulled back only as far as needed to stay inside the pane.
+  commentLeft(index, split) {
+    const inset = this.matchSet?.has(index) ? MATCH_BORDER : 0;
+    const total = this.contentWidth ?? this.viewportWidth;
+    let anchor = split ? SPLIT_GUTTER_START : INLINE_GUTTER_START;
+    if (split && this.selection?.side !== "old") anchor += inset + (total - inset - 1) / 2 + 1;
+    return Math.max(0, Math.min(anchor - 6, this.viewportWidth - this.commentPosition.width));
   }
   rowWithComments(row,t,split,index, pointer, font) {
     const height = this.baseSizes[index], breaks = this.rowWraps[index];
@@ -433,7 +459,7 @@ export class DiffTab {
       .child(div().w_full().h(height).flex_none().relative().font_family(font)
         .child(split ? this.splitRow(row, t, height, breaks, index) : this.inlineRow(row, t, height, breaks?.[0], index))
         .when(Boolean(pointer), e => e.child(pointer)))
-      .when(this.selectedRow===row,e=>e.child(h_flex().w_full().child(div().w(this.commentPosition.inset).flex_none()).child(div().w(this.commentPosition.width).flex_none().child(this.thread))));
+      .when(this.selectedRow===row,e=>e.child(h_flex().w_full().child(div().w(this.commentPosition.inset + this.commentLeft(index, split)).flex_none()).child(div().w(this.commentPosition.width).flex_none().child(this.thread))));
   }
 
   fileFor(path) {
@@ -445,42 +471,76 @@ export class DiffTab {
   // A line of code with syntax colours; `tint` keeps added/removed text readable on its stronger background.
   inlineRow(r, t, height, breaks, index) {
     if (r.kind === "file") return this.fileRow(r, t);
-    if (r.kind === "@") return div().w_full().px(12).h(ROW).flex_none().truncate().bg(t.accent + "1c").text_color(t.accent).child(r.text);
+    if (r.kind === "@") return div().w_full().px(12).h(ROW).flex_none().truncate().bg(t.raised).border_t(1).border_b(1).border_color(t.border).text_color(t.dim).child(r.text);
     const add = r.kind === "+", del = r.kind === "-", tone = add ? t.ansi2 : t.ansi1;
     const context = contextForRow(r, this.base?.source);
     const selected = (this.selectionMode || this.selectedRow) && selectionCovers(this.selection, context);
     return h_flex().id(`diff-hover-${index}`).w_full().h(height).items_start().flex_none()
       .text_color("#00000000").hover(style => style.text_color(t.accent))
-      .when(add || del, (e) => e.bg(tone + "40"))
-      .child(div().w(40).flex_none().text_right().pr(6).text_color(del ? t.ansi1 : t.dim).when(del, (e) => e.bg(tone + "55").font_semibold()).child(r.old === undefined ? "" : String(r.old)))
-      .child(div().w(40).flex_none().text_right().pr(6).text_color(add ? t.ansi2 : t.dim).when(add, (e) => e.bg(tone + "55").font_semibold()).child(r.next === undefined ? "" : String(r.next)))
-      .child(div().w(18).flex_none().text_center().font_bold().text_color(tone).child(add ? "+" : del ? "−" : ""))
+      .when(add || del, (e) => e.bg(tone + "1c"))
+      .child(div().w(40).flex_none().text_right().pr(6).text_color(del ? tone + "cc" : t.dim).when(del, (e) => e.bg(tone + "30")).child(r.old === undefined ? "" : String(r.old)))
+      .child(div().w(40).flex_none().text_right().pr(6).text_color(add ? tone + "cc" : t.dim).when(add, (e) => e.bg(tone + "30")).child(r.next === undefined ? "" : String(r.next)))
+      .child(div().w(18).flex_none().text_center().text_color(tone + "b0").child(add ? "+" : del ? "−" : ""))
       .child(this.badge(context, t))
-      .child(codeLine(r.text, r.path, t, this.highlights(r.path, del ? r.old : r.next, del ? "old" : "new"), tone, breaks))
+      .child(codeLine(r.text, r.path, t, this.highlights(r.path, del ? r.old : r.next, del ? "old" : "new"), tone, breaks, add || del))
       .when(selected, e => selectedDiffRow(e, t));
   }
 
+  // Side by side with wrapping off: each column stays half the pane and its code slides under a shared offset,
+  // so changes on the right are never pushed off-screen by a long line on the left.
+  hscrolled(el) {
+    if (this.layout !== "split" || this.wrapLines) return el;
+    return div().flex_1().min_w(0).overflow_hidden().child(div().w(this.diffWidth).flex_none().ml(-this.hx).child(el));
+  }
+  maxHx() {
+    const half = (this.viewportWidth - 1) / 2;
+    return Math.max(0, (this.diffWidth - 130) - (half - 62) + 24);
+  }
   half(cell, t, color, path, side, height, breaks, wholeRowSelected, index) {
     const selected = wholeRowSelected || (cell && (this.selectionMode || this.selectedRow) &&
       selectionCovers(this.selection, { path, side, line: cell.n }));
     return h_flex().id(`diff-hover-${index}-${side}`).flex_1().min_w(0).h(height).items_start()
       .text_color("#00000000").hover(style => style.text_color(t.accent))
-      .when(Boolean(cell?.change), (e) => e.bg(color + "40")).when(!cell, (e) => e.bg(t.raised + "88"))
-      .child(div().w(40).flex_none().text_right().pr(8).text_color(cell?.change ? color : t.dim).when(Boolean(cell?.change), (e) => e.bg(color + "55").font_semibold()).child(cell ? String(cell.n) : ""))
+      .when(Boolean(cell?.change), (e) => e.bg(color + "1c")).when(!cell, (e) => e.bg(t.raised + "88"))
+      .child(div().w(40).flex_none().text_right().pr(8).text_color(cell?.change ? color + "cc" : t.dim).when(Boolean(cell?.change), (e) => e.bg(color + "30")).child(cell ? String(cell.n) : ""))
       .child(this.badge(cell?contextForRow({kind:"c",path,l:side==="old"?cell:null,r:side==="new"?cell:null,baseRevision:this.comparisonResolved?.sha,baseLabel:this.comparisonResolved?.name,oldContextUnavailable:Boolean(this.ignoreWhitespace)},this.base.source,side):null,t))
-      .child(cell ? codeLine(cell.text, path, t, this.highlights(path, cell.n, side), color, breaks) : div().flex_1())
+      .child(cell ? this.hscrolled(codeLine(cell.text, path, t, this.highlights(path, cell.n, side), color, breaks, Boolean(cell.change))) : div().flex_1())
       .when(selected, e => selectedDiffRow(e, t));
   }
 
   splitRow(r, t, height, breaks, index) {
     if (r.kind === "file") return this.fileRow(r, t);
-    if (r.kind === "@") return div().w_full().px(12).h(ROW).flex_none().truncate().bg(t.accent + "1c").text_color(t.accent).child(r.text);
+    if (r.kind === "@") return div().w_full().px(12).h(ROW).flex_none().truncate().bg(t.raised).border_t(1).border_b(1).border_color(t.border).text_color(t.dim).child(r.text);
     const wholeRowSelected = this.selectionMode === "row" && this.selection && selectionCovers(
       this.selection, contextForRow(r, this.base?.source, this.selection.side));
     return h_flex().w_full().h(height).flex_none()
       .child(this.half(r.l, t, t.ansi1, r.path, "old", height, breaks?.[0], wholeRowSelected, index))
       .child(div().w(1).h_full().flex_none().bg(t.border))
       .child(this.half(r.r, t, t.ansi2, r.path, "new", height, breaks?.[1], wholeRowSelected, index));
+  }
+
+  // A slim position marker under each column while the code is wider than the column.
+  hscrollThumbs(t, maxHx) {
+    const half = (this.viewportWidth - 1) / 2, code = Math.max(1, half - 62);
+    const thumb = Math.max(28, Math.min(code, code * code / Math.max(code, this.diffWidth - 130)));
+    const left = 62 + (this.hx / maxHx) * (code - thumb);
+    const column = () => div().w(half).h_full().flex_none().relative()
+      .child(div().absolute().top(1).h(3).w(thumb).left(left).rounded(2).bg(t.dim + "90"));
+    return h_flex().absolute().bottom(0).left(0).w_full().h(5).child(column()).child(div().w(1).flex_none()).child(column());
+  }
+
+  // All-files view: while a file's own header has scrolled off, pin that file's name and +/- at the top.
+  stickyFileHeader(t, cx) {
+    const first = this.firstVisible ?? 0;
+    if (this.mode !== "all" || first <= 0 || !this.display[first] || this.display[first].kind === "file") return null;
+    let at = first;
+    while (at > 0 && this.display[at]?.kind !== "file") at--;
+    const header = this.display[at];
+    if (header?.kind !== "file") return null;
+    return div().id("sticky-file-header").absolute().top(0).left(0).w_full().h(FILE_ROW).bg(t.raised).cursor_pointer()
+      .on_mouse_down("left", (_e, c) => c.stop_propagation())
+      .on_click((_e, c) => { c.stop_propagation(); this.jump(at, c); })
+      .child(this.fileRow(header, t));
   }
 
   fileRow(r, t) {
@@ -498,13 +558,17 @@ export class DiffTab {
     const view = this.base, all = this.mode === "all", f = this.file;
     const add = this.files.reduce((n, x) => n + x.add, 0), del = this.files.reduce((n, x) => n + x.del, 0);
     const title = all ? "All changes" : G.basename(f?.path ?? "");
-    const sub = all ? `${this.files.length} file${this.files.length === 1 ? "" : "s"}` : f?.path?.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : "";
+    const against = this.comparison !== "local" ? ` · vs ${this.comparisonResolved?.name ?? (this.comparison === "origin" ? "origin default branch" : this.comparison)}` : "";
+    const sub = all ? `${this.files.length} file${this.files.length === 1 ? "" : "s"}${against}` : (f?.path?.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : "") + against;
     return h_flex().h(44).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
       .child(all ? icon("layers", 16).text_color(t.muted) : fileIcon(f?.path ?? "", 18))
       .child(div().font_bold().text_size(15).flex_none().text_color(t.foreground).child(title))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(sub))
       .when(add > 0, (e) => e.child(div().text_size(12).font_bold().flex_none().text_color(t.ansi2).child(`+${add}`)))
       .when(del > 0, (e) => e.child(div().text_size(12).font_bold().flex_none().text_color(t.ansi1).child(`−${del}`)))
+      .when(this.comparison !== "local", e => e
+        .child(toolButton("compare-local", "files", "Local changes", t, cx => this.setComparison("local", cx)))
+        .child(iconButton("compare-fetch", "refresh", t, cx => this.fetchOrigin(cx), { title: this.fetching ? "Fetching…" : "Fetch origin" })))
       .child(h_flex().flex_none().gap(2)
         .child(iconButton("lay-inline", "rows", t, (cx) => this.setLayout("inline", cx), { active: this.layout === "inline", title: "Inline" }))
         .child(iconButton("lay-split", "columns", t, (cx) => this.setLayout("split", cx), { active: this.layout === "split", title: "Side by side" })))
@@ -516,19 +580,23 @@ export class DiffTab {
 
   firstFile() { const p = this.files[0]?.path; return p ? this.fileFor(p) : null; }
 
+  // The "Working tree against …" caption and repo path are gone; only a slim row while loading remains.
   footer(t) {
-    const f = this.file, all = this.mode === "all";
-    const what = this.comparison!=="local" ? "Working tree against the last shared commit" : all ? "Working tree against HEAD" : f?.fresh ? "New file" : f?.group === "staged" ? "Index against HEAD" : f?.group === "head" ? "Working tree against HEAD" : "Working tree against index";
-    return h_flex().h(22).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(11).text_color(t.dim)
-      .child(div().flex_none().child(what))
-      .child(div().flex_1().min_w(0).truncate().child(this.base?.source?.root ?? ""))
-      .child(div().flex_none().child(this.error ? "" : this.loading ? "Loading…" : ""));
+    if (this.error || !this.loading) return null;
+    return h_flex().h(22).flex_none().px(12).items_center().border_b(1).border_color(t.border).text_size(11).text_color(t.dim)
+      .child(div().flex_none().child("Loading…"));
   }
 
   render(cx) {
     const t = theme(),event=shared(REPOSITORY_EVENT);
     if(event && event.root===this.base?.source?.root && (event.on??null)===(this.base?.source?.on??null) && event.version!==this.repositoryVersion){this.repositoryVersion=event.version;invalidateReads();this.load(cx,true);}
     if (this.base?.source?.root && (this.sig() !== this.loadedSig)) this.load(cx);
+    // The thread deleted the last comment on its line: close the inline panel (same as Esc).
+    const closeReq = shared(CLOSE_THREAD_KEY);
+    if (closeReq && closeReq.at > this.closeSeen) {
+      this.closeSeen = closeReq.at;
+      if (this.selectedRow && this.selection?.path === closeReq.path) { this.selectedRow = null; this.pendingCommentOpen = false; this.handle.focus(); this.resizeRows(); }
+    }
     const shell = (children) => v_flex().id("scm-diff").track_focus(this.handle)
       .on_key_down((e,cx)=>{
         if (e.key === "escape" && (this.selectedRow || this.pendingCommentOpen)) {
@@ -541,6 +609,7 @@ export class DiffTab {
         }
         else if(e.keystroke==="cmd-shift-i"){cx.stop_propagation();this.openComment(cx);}
         else if(e.keystroke==="cmd-f"){cx.stop_propagation();this.openSearch(cx);}
+        else if(e.keystroke==="cmd-c"&&this.handle.is_focused()&&this.copySelection(cx)){cx.stop_propagation();}
         else if(e.keystroke==="alt-down"||e.keystroke==="alt-up"){cx.stop_propagation();this.moveChange(e.keystroke==="alt-down"?1:-1,cx);}
       }).size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).children(children);
     if (!this.base) return shell([div().p(16).text_color(t.dim).child("Pick a changed file in the Changes panel.")]);
@@ -548,15 +617,25 @@ export class DiffTab {
     const font = settings().font_family ?? "JetBrains Mono";
     this.resizeRows();
     const list = v_virtual_list("scm-diff-rows", this.display.length, this.sizes, (i) => String(i),
-      range => this.display.slice(range.start, range.end).map((row, offset) => {
+      range => {
+        // Remember the first visible row for the pinned file header. Never notify from here: asking the view to
+        // re-render while the list is rendering blanks the list. The wheel handler below refreshes the header instead.
+        this.firstVisible = range.start;
+        return this.display.slice(range.start, range.end).map((row, offset) => {
         const index = range.start + offset;
         const slot = index % this.pointerRows.length;
         const pointer = offset < this.pointerRows.length && this.pointerRows[slot];
         if (pointer) this.pointerSlots[slot] = index;
         return this.rowWithComments(row, t, split, index, pointer, font);
-      }))
+        });
+      })
       .on_item_click((key, cx) => this.rowClicked(Number(key), cx)).track_scroll(this.scroll).size_full();
-    const contentWidth=split?Math.max(760,this.diffWidth*2):this.diffWidth;
+    const sticky = this.stickyFileHeader(t, cx);
+    const hscroll = !this.wrapLines && !split;      // inline view: the whole row scrolls
+    const splitScroll = !this.wrapLines && split;   // side by side: columns stay put, code slides
+    const maxHx = splitScroll ? this.maxHx() : 0;
+    this.hx = Math.min(this.hx, maxHx);
+    const contentWidth=this.diffWidth;
     const body=div().id("diff-viewport").flex_1().min_w(0).min_h(0).h_full().relative()
       .on_size_change((size, cx) => {
         const targetsChanged = this.resizePointerRows(size.height, cx);
@@ -569,8 +648,17 @@ export class DiffTab {
       .on_hover(hovered => { if (!hovered) this.drag = null; })
       .on_mouse_down("left",e=>{this.commentPosition=commentPlacement(this.contentLeft??0,e.bounds?.x??0,this.contentWidth??this.viewportWidth,this.viewportWidth);})
       .text_size(FONT_SIZE)
-      .child(div().id(`scm-diff-x-${this.horizontalVersion}`).size_full().when(!this.wrapLines, e => e.overflow_x_scrollbar())
-        .child(div().size_full().when(!this.wrapLines, e => e.min_w(contentWidth))
+      .on_scroll_wheel((e, cx) => {
+        // Vertical scrolling: re-render once the list has moved so the sticky file header follows (one event behind).
+        if (this.mode === "all" && e.delta.y) cx.notify();
+        if (!splitScroll) return;
+        const dx = Math.abs(e.delta.x) >= Math.abs(e.delta.y) ? e.delta.x : (e.modifiers?.shift ? e.delta.y : 0);
+        if (!dx) return;
+        const next = Math.max(0, Math.min(this.maxHx(), this.hx - dx));
+        if (next !== this.hx) { this.hx = next; cx.notify(); }
+      })
+      .child(div().id(`scm-diff-x-${this.horizontalVersion}`).size_full().when(hscroll, e => e.overflow_x_scrollbar())
+        .child(div().size_full().when(hscroll, e => e.min_w(contentWidth))
         .on_size_change(size=>{this.contentWidth=size.width;})
         .on_mouse_down("left",e=>{
           this.contentLeft=e.bounds?.x??0;this.clicks=e.click_count??1;this.shift=Boolean(e.modifiers?.shift);
@@ -585,13 +673,15 @@ export class DiffTab {
           const index = this.pointerIndex(e);
           if (this.drag) this.moveDrag(index, e, cx);
         }).child(list)))
+      .when(Boolean(sticky), e => e.child(sticky))
+      .when(maxHx > 0, e => e.child(this.hscrollThumbs(t, maxHx)))
       .child(Scrollbar.vertical("scm-diff-rows").viewport_from_layout().absolute().inset_0());
     return shell([
-      this.header(t, cx),this.comparisonBar(t),reviewToolbar(this,t),this.commentBar(t),this.footer(t),
+      this.header(t, cx),this.comparisonBar(t),reviewToolbar(this,t),this.commentBar(t, cx),this.footer(t),
       this.searchOpen?searchBar(this,t):null,
       this.fetchError ? div().px(12).py(6).text_size(12).text_color(t.ansi1).child(this.fetchError) : null,
       this.error ? div().px(12).py(8).text_size(12).text_color(t.ansi1).child(this.error) : null,
-      !this.display.length && !this.loading && !this.error ? div().p(16).text_color(t.dim).child(this.mode==="all"?"No changes for this comparison":"No changes in this file") : h_flex().id("review-content").w_full().flex_1().min_h(0).items_stretch().overflow_hidden().child(this.mode==="all"&&this.showFiles?fileNavigator(this,t):div().w(0)).child(body),
+      !this.display.length && !this.loading && !this.error ? div().p(16).text_color(t.dim).child(this.mode==="all"?"No changes for this comparison":"No changes in this file") : h_flex().id("review-content").w_full().flex_1().min_h(0).items_stretch().overflow_hidden().child(this.mode==="all"&&this.showFiles?h_resizable("review-file-split").size_full().child(resizable_panel().size(248).size_range(160,520).child(fileNavigator(this,t))).child(resizable_panel().child(body)):body),
       this.truncated ? div().px(12).py(4).border_t(1).border_color(t.border).text_size(11).text_color(t.dim).child(`Showing the first ${MAX_ROWS.toLocaleString()} lines`) : null,
     ].filter(Boolean));
   }

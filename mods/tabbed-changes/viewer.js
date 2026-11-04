@@ -9,7 +9,7 @@ import { Coalescer } from "./read-cache.js";
 import { readGit, invalidateReads, REPOSITORY_EVENT } from "./repository.js";
 import * as G from "./git.js";
 import { toolButton, codeLine, fileIcon, commentGutter, inCommentGutter, CODE_ROW as ROW } from "./ui.js";
-import { wrapBreaks, wrapColumns } from "./review-model.js";
+import { wrapBreaks, wrapColumns, hangFor } from "./review-model.js";
 import { openInEditor, showDiff } from "./tabs.js";
 
 const MAX_LINES = 20000, FONT_SIZE = 13, GUTTER_START = 52;
@@ -122,7 +122,7 @@ export class FileTab {
     if (this.wrapSource !== this.lines || this.wrapColumnCount !== columns) {
       this.wrapSource = this.lines;
       this.wrapColumnCount = columns;
-      this.rowWraps = columns ? this.lines.map(line => wrapBreaks(line, columns)) : [];
+      this.rowWraps = columns ? this.lines.map(line => wrapBreaks(line, columns, hangFor(line))) : [];
       this.sizesKey = null;
     }
     const height=this.selected===null?0:INLINE_COMMENT_HEIGHT,key=`${this.selected}:${height}`;

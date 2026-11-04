@@ -27,10 +27,11 @@ export function formatComments(notes) {
 export async function deliverComments({ notes, target, space, agents, send }) {
   const agent = agents.find(a => a.address === target && a.space === space);
   if (!agent) throw new Error('Choose a live agent in this space.');
-  if (agent.status !== 'idle') throw new Error('The agent must be idle before sending.');
+  // "done" = finished a turn and waiting at its prompt; hc's --if guard only knows idle/working, so skip it there.
+  if (agent.status !== 'idle' && agent.status !== 'done') throw new Error('The agent must be idle (or finished) before sending.');
   const message = formatComments(notes);
   if (message.length > 60000) throw new Error('Send fewer comments at once (maximum 60,000 characters).');
-  const result = await send(['send', '--if', 'idle', agent.address, message]);
+  const result = await send(agent.status === 'idle' ? ['send', '--if', 'idle', agent.address, message] : ['send', agent.address, message]);
   if (result.code !== 0) throw new Error(result.stderr?.trim() || result.stdout?.trim() || 'The agent did not accept the comments.');
   return result;
 }

@@ -18,6 +18,8 @@ let calls=[];
 const target={address:'t1',space:'s1',status:'idle'};
 await C.deliverComments({notes:[note],target:'t1',space:'s1',agents:[target],send:async args=>{calls.push(args);return {code:0};}});
 assert.deepEqual(calls[0].slice(0,4),['send','--if','idle','t1']);
+calls=[];await C.deliverComments({notes:[note],target:'t1',space:'s1',agents:[{...target,status:'done'}],send:async args=>{calls.push(args);return {code:0};}});
+assert.equal(calls[0][1],'t1','a finished (done) agent is sendable, without the idle-only --if guard');
 await assert.rejects(()=>C.deliverComments({notes:[note],target:'t1',space:'s1',agents:[{...target,status:'working'}],send:async()=>assert.fail()}),/idle/i);
 await assert.rejects(()=>C.deliverComments({notes:[note],target:'t1',space:'s2',agents:[target],send:async()=>assert.fail()}),/agent/i);
 await assert.rejects(()=>C.deliverComments({notes:[note],target:'t1',space:'s1',agents:[target],send:async()=>({code:1,stderr:'offline'})}),/offline/);

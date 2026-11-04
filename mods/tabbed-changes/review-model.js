@@ -3,9 +3,12 @@ export function diffFlags(options={}) {
   return [`--unified=${[3,10,30].includes(options.context)?options.context:3}`,...(options.ignoreWhitespace?['--ignore-all-space']:[])];
 }
 const segments=text=>[...text.matchAll(/\s+|[A-Za-z0-9_$]+|[^A-Za-z0-9_$\s]/gu)].map(m=>({text:m[0],start:m.index,end:m.index+m[0].length}));
-const mergeSpans=items=>{
-  const out=[];for(const item of items){const last=out[out.length-1];if(last?.end===item.start)last.end=item.end;else out.push({start:item.start,end:item.end});}return out;
+// Touching spans join, and so do spans split only by one or two spaces, so a changed phrase is one block, not a box per word.
+const mergeSpans=(items,text='')=>{
+  const out=[];for(const item of items){const last=out[out.length-1];
+    if(last&&(last.end===item.start||/^ {1,2}$/.test(text.slice(last.end,item.start))))last.end=item.end;else out.push({start:item.start,end:item.end});}return out;
 };
+const solid=text=>text.replace(/\s+/g,'').length;
 export function wordChanges(oldText,newText) {
   if(oldText===newText)return {old:[],next:[]};
   const whole=()=>({old:oldText?[{start:0,end:oldText.length}]:[],next:newText?[{start:0,end:newText.length}]:[]});
@@ -20,7 +23,11 @@ export function wordChanges(oldText,newText) {
     else if(i<n&&(j===m||table[i+1][j]>=table[i][j+1]))removed.push(a[i++]);
     else added.push(b[j++]);
   }
-  return {old:mergeSpans(removed),next:mergeSpans(added)};
+  // A mostly rewritten line gets no word highlight: its whole-line tint already says so, and boxes everywhere are noise.
+  const share=(spans,text)=>{const total=solid(text);return total?spans.reduce((n,s)=>n+solid(text.slice(s.start,s.end)),0)/total:0;};
+  const oldSpans=mergeSpans(removed,oldText),newSpans=mergeSpans(added,newText);
+  if(solid(oldText)+solid(newText)>=40&&Math.max(share(oldSpans,oldText),share(newSpans,newText))>0.6)return {old:[],next:[]};
+  return {old:oldSpans,next:newSpans};
 }
 export function splitTokens(tokens,spans=[]) {
   if(!spans.length)return tokens;
@@ -55,8 +62,11 @@ export function fileTree(files,query='',collapsed=new Set()) {
     }
   }
   const out=[];function flatten(children,depth){
-    for(const node of [...children.values()].sort((a,b)=>a.kind===b.kind?a.name.localeCompare(b.name):a.kind==='folder'?-1:1)){
-      out.push({kind:node.kind,path:node.path,name:node.name,depth,file:node.file,closed:!filter&&collapsed.has(node.path)});
+    for(let node of [...children.values()].sort((a,b)=>a.kind===b.kind?a.name.localeCompare(b.name):a.kind==='folder'?-1:1)){
+      // Compact folders (VS Code/Zed): a folder whose only child is a folder shares one row, "a/b/c".
+      let name=node.name;
+      while(node.kind==='folder'&&node.children.size===1){const only=[...node.children.values()][0];if(only.kind!=='folder')break;name+='/'+only.name;node=only;}
+      out.push({kind:node.kind,path:node.path,name,depth,file:node.file,closed:!filter&&collapsed.has(node.path)});
       if(node.kind==='folder'&&(filter||!collapsed.has(node.path)))flatten(node.children,depth+1);
     }
   }flatten(root,0);return out;
@@ -74,8 +84,15 @@ export function wrapColumns(width, gutter, fontSize) {
 
 // Break at whitespace when possible, and within long words when necessary.
 // Offsets refer to the original text so token colors and comment snapshots survive.
-export function wrapBreaks(text, columns) {
+// Wrapped rows hang `hang` columns in (the line's own indent plus two), so continuations read as part of their line.
+export function hangFor(text) {
+  let n = 0;
+  for (const ch of text ?? '') { if (ch === ' ') n++; else if (ch === '\t') n += 4; else break; }
+  return Math.min(n, 32) + 2;
+}
+export function wrapBreaks(text, columns, hang = 0) {
   if (!text || !columns) return null;
+  const indent = Math.min(hang, Math.floor(columns / 2));
   let start = 0, offset = 0, used = 0, space = 0;
   const breaks = [];
   while (offset < text.length) {
@@ -84,13 +101,14 @@ export function wrapBreaks(text, columns) {
     if (used + size > columns && offset > start) {
       offset = start = space > start ? space : offset;
       breaks.push(start);
-      used = 0;
+      used = indent;
       continue;
     }
     offset += point > 0xffff ? 2 : 1;
     used += size;
     if (point === 32 || point === 9) space = offset;
   }
+  if (breaks.length && indent > 0) breaks.hang = indent;
   return breaks.length ? breaks : null;
 }
 

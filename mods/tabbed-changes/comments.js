@@ -9,7 +9,12 @@ const KEY = 'tabbed-changes.comments.v1';
 const allNotes = () => shared(KEY) ?? [];
 export const commentsFor = source => forSource(allNotes(), source);
 export const lineComments = context => forLine(allNotes(), context);
-export const idleCommentAgents = space => agents().filter(a => a.space === space && a.status === 'idle');
+// Agents a comment can be sent to: idle, or done (finished a turn, waiting for input).
+const sendable = a => a.status === 'idle' || a.status === 'done';
+export const idleCommentAgents = space => agents().filter(a => a.space === space && sendable(a));
+export const busyCommentAgents = space => agents().filter(a => a.space === space && !sendable(a));
+// Deleting a line's last comment asks the open diff to close its inline panel (see DiffTab.render).
+export const CLOSE_THREAD_KEY = 'tabbed-changes.close-thread';
 export const removeSavedComment = id => setShared(KEY, allNotes().filter(note => note.id !== id));
 export const sendSavedComment = (note, target, space) =>
   sendAndRemove({ note, target, space, agents: agents(), send: args => hc(args), read: allNotes, write: next => setShared(KEY, next) });
@@ -31,12 +36,12 @@ export const commentBadge = t => div().size(30).flex_none().flex().items_center(
 export const savedCommentCard = t => v_flex().w_full().flex_none().min_w(0).px(10).py(7).gap(6)
   .rounded(6).bg(t.raised).border(1).border_color(t.border);
 
-export function commentAgentPicker(t, { id, agents, target, enabled, select }) {
+export function commentAgentPicker(t, { id, agents, target, enabled, select, busy = 0 }) {
   return div().id(id).flex_1().min_w(0).h(28).overflow_x_scrollbar()
     .child(h_flex().h_full().gap(5).items_center()
-      .child(div().flex_none().text_size(11).text_color(t.muted).child(agents.length ? 'Send to' : 'No idle agent available'))
+      .child(div().flex_none().text_size(11).text_color(t.muted).child(agents.length ? 'Send to' : busy ? `${busy} agent${busy > 1 ? 's' : ''} busy · try again when idle` : 'No agent running in this space'))
       .children(agents.map(agent => commentButton(`${id}-${agent.address}`,
-        `${target === agent.address ? '✓ ' : ''}${agent.program?.name ?? agent.app ?? 'Agent'} · ${agent.address}`, t,
+        `${target === agent.address ? '✓ ' : ''}${agent.program?.name ?? agent.app ?? 'Agent'} · ${agent.address} · ${agent.status}`, t,
         cx => select(agent.address, cx), { active: target === agent.address, enabled }))));
 }
 
@@ -110,7 +115,7 @@ export class InlineComments extends View {
       .child(h_flex().h(28).flex_none().gap(10).items_center()
         .child(div().flex_none().text_size(11).font_semibold().text_color(t.foreground).child(`Saved comments (${notes.length})`))
         .when(notes.length > 0, e => e.child(commentAgentPicker(t, {
-          id: 'line-agents', agents: idle, target: this.target, enabled: !this.busy,
+          id: 'line-agents', agents: idle, busy: busyCommentAgents(this.space).length, target: this.target, enabled: !this.busy,
           select: (address, cx) => { this.target = address; cx.notify(); },
         }))))
       .when(!notes.length, e => e.child(div().flex_1().text_color(t.dim).child('No saved comments on this line.')))
@@ -126,6 +131,8 @@ export class InlineComments extends View {
           removeSavedComment(note.id);
           this.note = 'Comment deleted.';
           this.error = null;
+          // Nothing left on this line: close the inline panel instead of leaving an empty thread.
+          if (!lineComments(this.context).length && this.context) setShared(CLOSE_THREAD_KEY, { at: Date.now(), path: this.context.path, line: this.context.line });
           cx.notify();
         }, { enabled: !this.busy }))
         .child(note.sentAt ? div().text_size(11).text_color(t.ansi2).child(`Sent to ${note.sentTo}`) :

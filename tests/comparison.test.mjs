@@ -22,7 +22,7 @@ registerHooks({resolve(specifier,context,next){return ['herdr','gpui-kit','gpui-
  export const panes=()=>[],focused=()=>null,watchFolder=()=>{},theme=()=>({}),settings=()=>({}),run=(...args)=>h.run?.(...args),agents=()=>[],hc=()=>{};`};
  if(url==='test:gpui-kit')return {format:'module',shortCircuit:true,source:'export class View {} export const div=()=>{},svg=()=>{},image=()=>{};'};
  if(url==='test:gpui-base')return {format:'module',shortCircuit:true,source:`
- export const v_flex=()=>{},h_flex=()=>{},Scrollbar={},v_virtual_list=()=>{},Textarea={},Input={};
+ export const v_flex=()=>{},h_flex=()=>{},Scrollbar={},v_virtual_list=()=>{},h_resizable=()=>{},resizable_panel=()=>{},Textarea={},Input={};
  export const InputState={new:()=>{let value='',handlers={};return {on:(name,fn)=>handlers[name]=fn,value:()=>value,set_value:v=>{value=v;handlers.change?.({},globalThis.__comparisonHost.context);},focus(){this.focused=true;},release(){}};}};
  export const TextareaState=InputState;
  export const VirtualListScrollHandle={new:()=>({positions:[],scroll_to_item(i){this.positions.push(i);},release(){}})};

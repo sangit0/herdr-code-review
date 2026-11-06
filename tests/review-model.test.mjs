@@ -3,7 +3,8 @@ const M=await import('../mods/tabbed-changes/review-model.js').catch(()=>({}));
 assert.equal(typeof M.wordChanges,'function','word-level diff helper required');
 assert.deepEqual(M.wordChanges('return first + count;','return second + count;'),{old:[{start:7,end:12}],next:[{start:7,end:13}]});
 assert.deepEqual(M.wordChanges('same','same'),{old:[],next:[]});
-const unicode=M.wordChanges('🐈 cat','🐕 dog');assert.deepEqual(unicode.old,[{start:0,end:2},{start:3,end:6}]);
+const unicode=M.wordChanges('🐈 cat','🐕 dog');assert.deepEqual(unicode.old,[{start:0,end:6}]); // words split by one space merge into one block
+assert.deepEqual(M.wordChanges('const alpha = computeTotal(items, taxRate, discount);','return await fetchEverything(request, response, context)'),{old:[],next:[]}); // rewritten line: no word boxes
 assert.equal(M.wordChanges('x'.repeat(9000),'y'.repeat(9000)).old[0].end,9000);
 const tokens=[{text:'const',kind:'keyword'},{text:' value = 1;'}];
 const split=M.splitTokens(tokens,[{start:6,end:11}]);assert.equal(split.map(t=>t.text).join(''),'const value = 1;');assert.equal(split.filter(t=>t.changed).map(t=>t.text).join(''),'value');
@@ -17,6 +18,13 @@ const files=[{path:'src/lib/a.js'},{path:'src/b.js'},{path:'README.md'}];
 let tree=M.fileTree(files,'',new Set());assert.ok(tree.some(n=>n.kind==='folder'&&n.path==='src/lib'));assert.equal(tree.filter(n=>n.kind==='file').length,3);
 tree=M.fileTree(files,'a.js',new Set(['src']));assert.deepEqual(tree.filter(n=>n.kind==='file').map(n=>n.path),['src/lib/a.js']);
 assert.equal(M.fileTree(files,'',new Set(['src'])).filter(n=>n.kind==='file').length,1);
+
+// Hanging indent: continuation rows reserve the indent so they never overflow the column budget.
+{ const b=M.wrapBreaks('    alpha beta gamma delta epsilon zeta',16,M.hangFor('    alpha beta gamma delta epsilon zeta'));
+  assert.ok(b&&b.hang>0,'hang recorded');
+  let prev=0; for(const cut of b){assert.ok(cut-prev<=16-b.hang+ (prev?0:b.hang),'row fits');prev=cut;}
+  assert.equal(M.hangFor('\t\tx'),10);assert.equal(M.hangFor('x'),2);
+  assert.deepEqual(M.wrapBreaks('const value = 42;',8),[6,14]); }
 console.log('word diffs, navigation, search and file tree ok');
 assert.equal(typeof M.commentPlacement,'function');
 assert.deepEqual(M.commentPlacement(-1200,0,2000,500),{inset:1200,width:500});

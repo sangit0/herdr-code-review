@@ -36,14 +36,16 @@ Local file views watch for relevant changes and use a 10-second fallback refresh
 
 ## Navigate and inspect diffs
 
-In **All changes**, the **Files** icon toggles a changed-file tree. Filter by filename or path, fold folders, and click a file to jump to its diff. File navigation uses the loaded diff without running Git again.
+In **All changes**, the **Files** icon toggles a changed-file tree. Filter by filename or path, fold folders, and click a file to jump to its diff. File navigation uses the loaded diff without running Git again. Single-child folder chains share one row (`src/utils/format`), each file shows its `+N −N`, and the panel is resizable by dragging its divider.
 
 - **Previous/next change:** toolbar arrows or **Alt+Up / Alt+Down** jump between diff hunks and wrap at the ends.
+- **Copy:** select lines (click, or drag / Shift-click a range) and press **⌘C**, or use **Copy** in the selection bar, to copy the plain code without line numbers or `+`/`−` markers. With nothing selected, **⌘C** copies the current line.
+- **Sticky file header:** in All changes, the current file's name and `+N −N` stay pinned at the top while you scroll its diff; click it to jump to the file's start.
 - **Find:** **⌘F** opens case-insensitive text/path search within the loaded diff. Enter/Shift+Enter and the search arrows move between matching rows. Searching expands folded files; matches have an amber row marker.
-- **Words:** off by default. Turn it on to highlight changed words inside paired removed and added lines. Unusually large lines use a whole-line highlight.
+- **Words:** on by default. Changed words inside paired removed and added lines are highlighted; words separated by a space merge into one block, and a mostly rewritten line keeps only its line tint instead of a box on every word. Unusually large lines use a whole-line highlight.
 - **Ignore spaces:** hides whitespace-only changes, for both local and origin comparisons. Git's filtered context does not retain exact original whitespace, so original-side comments on unchanged context rows are unavailable in this mode. Turn it off to comment on those rows. Removed lines and current-side comments remain available.
 - **Show more lines:** expands the unchanged code around each change from three lines to ten. **Show fewer lines** returns to the compact view. Selections and drafts remain available when their lines are still visible.
-- **Wrap lines:** long lines fit the pane by default in diffs and file previews. In split view, each side wraps within its own column. Turn wrapping off to scroll horizontally. **⌘⇧I** reveals or focuses the comment input.
+- **Wrap lines:** long lines fit the pane by default in diffs and file previews. In split view, each side wraps within its own column. Wrapped rows hang two columns past the line's own indent. Turn wrapping off to scroll horizontally; in split view both columns stay half the pane and slide together (trackpad swipe or Shift+wheel). **⌘⇧I** reveals or focuses the comment input.
 
 Search and navigation respect the 8,000-row display limit. They do not edit files, fetch, switch branches or push.
 

@@ -2,7 +2,7 @@ import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { closeOverlay, props, spaces, theme } from "herdr";
 import {
-  commentAgentPicker, commentBadge, commentButton, commentsFor, idleCommentAgents,
+  commentAgentPicker, commentBadge, commentButton, commentsFor, idleCommentAgents, busyCommentAgents,
   removeSavedComment, savedCommentCard, sendSavedComment,
 } from "./comments.js";
 import { lineLabel } from "./comment-model.js";
@@ -53,7 +53,7 @@ export class CommentOverview {
   agentPicker(t, idle) {
     return h_flex().h(38).flex_none().px(9).items_center().rounded(6).border(1).border_color(t.border).bg(t.surface)
       .child(commentAgentPicker(t, {
-        id: "review-comment-agents", agents: idle, target: this.target, enabled: !this.sending,
+        id: "review-comment-agents", agents: idle, busy: busyCommentAgents(this.space).length, target: this.target, enabled: !this.sending,
         select: (address, cx) => { this.target = address; cx.notify(); },
       }));
   }

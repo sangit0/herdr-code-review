@@ -4,25 +4,27 @@ A Source Control and code-review mod: tabbed diffs, whole-change multibuffer, fi
 
 ## What you see
 - **Panel** (dock where Herdr's `changes` block sits): 42px header (branch icon, branch, ↑/↓ counts, layers "all changes", refresh), commit box (textarea + `Commit N staged` button), then sections MERGE CHANGES / STAGED CHANGES / CHANGES with 26px rows: name, folder in `dim`, `+N −N`, status letter (`blocked` M, `ansi2` A/U, `ansi1` D/!).
-- **Diff tab**: 38px header (icon, name, folder, `+N −N`, inline/side-by-side pair, All changes / Single file, Open file, Neovim), 22px caption (what is compared, repo path), then 20px rows with two 40px number gutters.
+- **Diff tab**: 44px header with file/commit identity, counts, inline/side-by-side controls and single/all-file mode; a slim loading row only while loading; virtualized code rows and a wrapping shortcut footer. Historical reviews identify the commit and omit working-file/editor/comment actions.
 
 ## How it behaves
 - Row click: preview diff tab (named Changes, made once per space and reused; `shared("tabbed-changes.view")[space] = {view, tab, at}`). Double-click: pinned tab (`props.pinned`).
 - Hover row: Neovim, Open file, Discard (asks), Stage/Unstage.
 - Diff: double-click a code line to select its row. Use the Neovim button to open the file in the editor. File header rows fold on click and open the single-file diff on double-click.
 - Staging moves the file between sections; the preview follows it.
+- History drills from the current HEAD's commits into changed files, then opens an immutable single-file or all-files review. Bottom shortcut hints reflect the current mode and selection.
+- The default local editor action reuses the selected tab's persistent Neovim. Custom/remote editors and an absent companion retain the plain terminal path; installed-companion failures notify rather than silently falling back.
 
 ## Built from
-`main.js` picks `props.role`: none = panel, `diff`, `file`. `git.js` (pure: status, numstat, diff rows, side-by-side pairing, patch splitting, editor argv), `tabs.js` (tab opening, editor lookup), `panel.js`, `diff.js` (virtual list, clicks via `on_item_click` + click count from `on_mouse_down`), `viewer.js` (virtualized read-only file rows and Git gutter markers), `ui.js`, `icons/` (Lucide-style SVGs). Herdr API: `exec`, `watchFolder`, `readTextFile`, `shared/setShared`, `run("tab.new"|"tab.rename"|"tab.select")`.
+`main.js` dispatches `props.role`: panel, `diff`, `file`, `history`, `branches`, `comments` or `pane-header`. `git.js` handles status, numstat, diff rows, pairing, C-quoted patch paths, deletion metadata and editor argv. `tabs.js` opens previews, pinned/file tabs and history overlays; `editor.js` owns editor selection and captured-context companion handoff. `history.js` provides Git-object history reads; `history-view.js` owns the dialog. `shortcut-model.js` maps scoped keys to actions and `shortcuts.js` renders contextual keycaps. The existing `panel.js`, `diff.js`, `viewer.js`, `ui.js` and icon modules retain their review responsibilities.
 
 ## Watch out
 - `run` returns nothing: find the new tab by diffing the space's tab ids.
 - Virtual-list rows cannot hold handlers.
 - Reads use `--no-optional-locks -c core.fsmonitor=false` so the folder watch doesn't loop.
-- A diff tab is a mod pane with no folder: the panel must keep its repo while it is focused.
+- Review panes have no cwd. Resolve a recognized preview through `VIEW_KEY`; otherwise read the focused pane's saved props from the Core `herdr-app` document. Pinned diffs and file tabs use their own source, never an unrelated preview or space folder. Cache the resolved source only for that location; switching panes/spaces resets it. Standalone Source Control tabs (including an omitted role) use the space folder. The metadata query is read-only and requires `herdr-core` on PATH.
 
 ## Done when
-`herdr-app check` passes; `npm test` passes; clicking a file opens the Changes tab, a second click reuses it, double-click opens another labeled with the filename; All changes lists modified and untracked files; Neovim opens at the clicked line.
+`npm test` and `herdr-app check` pass; file previews reuse the Changes tab and pinned reviews remain separate; history opens root/ordinary/merge commits without working-tree contamination; historical views cannot edit/comment on the working tree; review hints follow mode/selection without hijacking inputs; default local Enter opens the requested line in the same tab's Neovim without creating another terminal; native tree icons preserve existing navigation and editor behavior.
 
 ## Review comments
 Hover over a code line to reveal its gutter +. Double-click selects the row and keeps the + visible. Shift-click extends a range. Click the + or press ⌘⇧I to expand a compact inline comment thread with a stable height before and after saving directly below that row. No separate comments panel or dialog. The retained `InlineComments` View in `comments.js` is created with `cx.new` outside render and mounted inside the selected virtual-list row. It switches from the composer to saved notes after Save comment. Saved notes have a same-space idle agent picker and per-note Send to agent and Delete actions. Closed threads use a gutter dot and count on each covered line; amber flags outdated snapshots. `comment-model.js` builds per-line contexts, scopes notes, remaps unchanged diff rows after refresh and formats delivery. File rows and inline diff rows use the current version, with removed lines attached to the original version. Split views attach comments to the clicked half. Hunk headers and missing cells cannot be commented on. Shared key `tabbed-changes.comments.v1` persists repository/machine-scoped notes with path, side, line and snapshot. Drafts survive switching lines in a tab. Send calls `hc(["send", "--if", "idle", address, text])`, never force; successful sends delete the note and failures retain it. No automatic sending. Verify inline save/reopen/delete in both views, and no-agent rejection. A real idle-agent send still needs end-to-end verification.
@@ -44,6 +46,15 @@ Clicking the branch name opens the same mod with role `branches`, a 520×420 dia
 
 Words defaults on. Context cycles 3/10/30. Ignore spaces passes `--ignore-all-space` to local and origin diff paths. Because Git -w emits new-side whitespace in context rows, mark those rows `oldContextUnavailable` and disallow original-side context comments rather than inventing a snapshot; actual removals and current-side comments remain valid. Side-by-side horizontal scrolling uses content-local pointer positions for side detection; comment placement derives visible offset from content/viewport event bounds. Cmd+Shift+I reveals the input by resetting horizontal position. Long token comparisons have a bounded whole-line fallback, preserving the underlying source text.
 
-Run `npm test`, `npm run check:herdr` (panel, inline/split diff, expanded comments/file view, branch picker), and optionally `npm run benchmark`. Tests use real disposable Git repositories plus native host-only stubs. They cover option round-trip races, scope changes, unchanged refreshes, selection preservation, ignored-whitespace comment fidelity, invalidation during flight and bounded caches. Native checks do not replace a visual/physical-pointer review; user selected automated verification for this pass.
+Run `npm test`, `npm run check:herdr` (the actual native mod load/render check), and optionally `npm run benchmark`. Tests use real disposable Git repositories plus native host-only adapters. They cover option races, scope changes, unchanged refreshes, selection preservation, ignored-whitespace comment fidelity, cache invalidation/bounds, history and keyboard policy. The native command is a smoke check, not a source/label snapshot suite. Automated live verification exercised history opening and the existing-tab Neovim handoff; no physical-pointer or fresh-frame visual verification is claimed for this pass.
 
 The default comparison control uses origin/HEAD when it names main or master, then main/master fallback. Hide it if neither ref is available; Fetch origin remains accessible. Do not use the current feature branch upstream as the review base.
+
+## History and embedded-editor contracts
+
+`listCommits(git, {limit, skip})` returns commits plus `hasMore`; log fields and records use NUL delimiters. Full SHA-1/SHA-256 object IDs identify reviews. An unborn repository is empty history; other Git failures propagate. `commitFiles` preserves NUL-delimited paths and binary counts. `commitPatch` reads commit objects only, using the empty tree for roots and first-parent comparisons for merges. `DiffTab` includes the commit in scope identity, stops working-tree watches for historical views, and disables working-tree editor/comment paths.
+
+History owns two virtual-list scroll handles and releases them on close. Key navigation keeps its selection visible; file-list index zero is the all-files review. The dialog closes only its own overlay. Review keyboard handling stays in each view and ignores inputs/modifiers; the README lists the bindings.
+
+`editor.js` captures the space, selected tab, terminal and source root before its asynchronous call to `<appHome>/mods/herdr-nvim/bin/herdr-nvim open --ctx <json> <absolute-file>:<line>`. It uses Herdr's native `appHome()` API, not Node-only imports. Helper spawn/transport/permission failures are not mistaken for an absent installation. The Node test adapter supplies this host API separately.
+

@@ -10,9 +10,13 @@ import { diffFlags,wordChanges,changedTargets,searchRows,stepTarget,fileTree,com
 import { Coalescer, Memo } from "./read-cache.js";
 import { readGit, invalidateReads, invalidateRepository, REPOSITORY_EVENT } from "./repository.js";
 import * as G from "./git.js";
-import { VIEW_KEY, openInEditor, openFileTab, showDiff } from "./tabs.js";
+import { VIEW_KEY, openFileTab, showDiff, showHistory, diffPane, zoomDiff } from "./tabs.js";
 import { reviewToolbar,searchBar,fileNavigator } from "./review-controls.js";
 import { iconButton, toolButton, icon, codeLine, fileIcon, commentGutter, inCommentGutter, COMMENT_GUTTER, CODE_ROW as ROW } from "./ui.js";
+import { openInEditor, editorLabel } from "./editor.js";
+import { commitPatch } from "./history.js";
+import { reviewAction } from "./shortcut-model.js";
+import { shortcutFooter } from "./shortcuts.js";
 
 const LAYOUT_KEY = "tabbed-changes.layout"; // "inline" | "split", shared so every diff tab agrees
 const FILE_ROW = 32, MAX_ROWS = 8000, MAX_UNTRACKED = 40, FONT_SIZE = 12;
@@ -28,12 +32,12 @@ export class DiffTab {
     this.pinnedView = p.view ?? null; this.comparisonOverride=null; this.comparisonResolved=null;
     this.startLayout = p.layout ?? null; // "split" | "inline": this tab starts in that layout
     this.collapsed = new Set(); this.display = []; this.sizes = []; this.files = []; this.clicks = 1;
-    this.handle=cx.focus_handle();this.handle.focus(); this.anchor=null; this.selection=null; this.shift=false; this.refs={old:[],new:[]};
+    this.handle=cx.focus_handle(); if (!p.paneMode) this.handle.focus(); /* a pane the panel opened stays passive: the panel keeps the keyboard */ this.anchor=null; this.selection=null; this.shift=false; this.refs={old:[],new:[]};
     this.selectedRow = null; this.selectionMode = null; this.thread = cx.new(InlineComments); this.closeSeen = shared(CLOSE_THREAD_KEY)?.at ?? 0;
     this.refreshQueue=new Coalescer();this.dataStamp=null;
     this.contextLines=3;this.ignoreWhitespace=false;this.wordHighlight=true;this.wordCache=new Memo(256);this.wordPairs=new Map();
     this.commentPosition={inset:0,width:600};this.viewportWidth=600;this.horizontalVersion=0;
-    this.wrapLines = true;
+    this.wrapLines = false; // off by default: long lines scroll sideways (turn on "Wrap lines" to fit them)
     this.pointerRows = [];
     this.pointerSlots = [];
     const review = this;
@@ -66,9 +70,9 @@ export class DiffTab {
   claim() {
     if (this.pinned || !this.space) return;
     const entry = shared(VIEW_KEY)?.[this.space];
-    if (!entry || entry.tab) return;
+    if (!entry || (entry.tab && (entry.pane || !entry.paneMode))) return;
     const f = focused(), pane = f?.pane ? panes().find((x) => x.pane === f.pane) : null;
-    if (pane?.mod === "tabbed-changes") setShared(VIEW_KEY, { ...shared(VIEW_KEY), [this.space]: { ...entry, tab: pane.tab } });
+    if (pane?.mod === "tabbed-changes") setShared(VIEW_KEY, { ...shared(VIEW_KEY), [this.space]: { ...entry, tab: pane.tab, pane: entry.paneMode ? pane.pane : entry.pane } });
   }
 
   // --- what to show -----------------------------------------------------------------------------
@@ -77,8 +81,9 @@ export class DiffTab {
   get mode() { return this.modeOverride ?? this.base?.mode ?? "file"; }
   get file() { return this.fileOverride ?? this.base?.file ?? null; }
   get layout() { return (this.startLayout ?? shared(LAYOUT_KEY)) === "split" ? "split" : "inline"; }
-  get comparison() { return this.comparisonOverride ?? this.base?.comparison ?? "local"; }
-  scopeSig(){return JSON.stringify([this.comparison,this.base?.source,this.mode,this.file?.group,this.file?.path,this.at]);}
+  get isHistorical() { return Boolean(this.base?.commit); }
+  get comparison() { return this.isHistorical ? "local" : this.comparisonOverride ?? this.base?.comparison ?? "local"; }
+  scopeSig(){return JSON.stringify([this.base?.commit?.sha??null,this.comparison,this.base?.source,this.mode,this.file?.group,this.file?.path,this.at]);}
   sig(){return JSON.stringify([this.contextLines??3,this.ignoreWhitespace??false,this.scopeSig()]);}
 
   // --- loading ----------------------------------------------------------------------------------
@@ -98,6 +103,7 @@ export class DiffTab {
   load(cx, quiet = false) {
     const view = this.base;
     if (!view?.source?.root) return;
+    if (this.isHistorical && this.shownSig === this.sig() && !this.error && !this.loading) return;
     if (this.inflight) { this.again = true; return; }
     if(!this.pinned && this.requestAt!==this.at){
       this.requestAt=this.at;this.modeOverride=null;this.fileOverride=null;this.comparisonOverride=null;this.collapsed.clear();
@@ -111,18 +117,22 @@ export class DiffTab {
       if (scope !== this.shownScope) this.selectionMode = null;
       this.dataStamp=null;this.display = []; this.baseSizes=[];this.changeIndices=[];this.matches=[];this.matchSet=new Set();this.treeNodes=[];this.sizes = []; this.files = []; this.selectedRow = null; this.selection=null; this.anchor=null; this.comparisonResolved=null; this.loading = true; }
     this.inflight = true;
-    const { root, on } = view.source, mode = this.mode, file = this.file, comparison=this.comparison,options=this.diffOptions();
-    this.watch(root, cx);
+    const { root, on } = view.source, mode = this.mode, file = this.file, comparison=this.comparison,options=this.diffOptions(),commit=view.commit;
+    if (commit) this.watched = null; else this.watch(root, cx);
     cx.spawn(async (cx) => {
       let changed=this.loading;
       try {
         const git = async (args) => {
           const r = await readGit({root,on},args);
-          if (r.code !== 0) throw new Error(G.tidy(r.stderr) || `git ${args[0]} failed`);
+          if (r.code !== 0) throw Object.assign(new Error(G.tidy(r.stderr) || `git ${args[0]} failed`), { code: r.code });
           return r.stdout;
         };
-        const remote=comparison!=="local" ? await resolveReviewBase(git,comparison) : null;
-        const files = mode === "all" ? await this.loadAll(git, root, on,remote,options) : await this.loadOne(git, root, on, file,remote,options);
+        const remote=!commit && comparison!=="local" ? await resolveReviewBase(git,comparison) : null;
+        let files;
+        if (commit) {
+          files = mode === "file" && !file?.path ? [] : G.splitPatch(await commitPatch(git, commit.sha, { ...options, path: mode === "file" ? file.path : undefined }));
+          for (const entry of files) if (!entry.lines.length) entry.lines = [entry.binary ? "Binary file changed" : "No text diff available"];
+        } else files = mode === "all" ? await this.loadAll(git, root, on,remote,options) : await this.loadOne(git, root, on, file,remote,options);
         if (this.sig() !== sig) return;
         const stamp=JSON.stringify([sig,remote,files]);
         if(stamp!==this.dataStamp || this.error){
@@ -292,22 +302,70 @@ export class DiffTab {
     const left = split && side === "new" ? inset + half + 1 : inset;
     return inCommentGutter(this.clickedX - left, split ? SPLIT_GUTTER_START : INLINE_GUTTER_START);
   }
+  // Dragging toward (or past) the top or bottom edge scrolls the rows and keeps extending the selection, so a long
+  // range can be selected in one drag. dir: -1 up, 1 down, 0 stop. It ends on mouse-up, or 4s after the last
+  // pointer event (mouse-up outside the pane is never delivered).
+  autoscroll(dir, cx) {
+    if (!this.drag) return;
+    if (dir === 0) { this.auto = null; return; }
+    if (this.auto?.dir === dir) { this.auto.seen = Date.now(); return; }
+    const token = { dir, seen: Date.now(), pos: this.firstVisible ?? 0 };
+    this.auto = token;
+    const tick = () => {
+      if (this.auto !== token || !this.drag) return;
+      if (Date.now() - token.seen > 4000) { this.auto = null; return; }
+      this.autoStep(token, cx);
+      cx.timer.after(45, tick);
+    };
+    cx.timer.after(0, tick);
+  }
+  // One tick: move the top row by 2 (our own running position, so the speed does not depend on repaint timing).
+  autoStep(token, cx) {
+    const last = this.display.length - 1;
+    if (last < 0) return;
+    const first = this.firstVisible ?? 0, count = Math.max(4, (this.lastVisible ?? first + 10) - first + 1);
+    token.pos = Math.max(0, Math.min(Math.max(0, last - count + 1), token.pos + token.dir * 2));
+    // scroll_to_item moves the least needed: a row below the view ends up at its bottom edge, one above at its top.
+    const edge = token.dir < 0 ? token.pos : Math.min(last, token.pos + count - 1);
+    this.scroll.scroll_to_item(edge, "top");
+    this.extendDragTo(edge, cx);
+  }
   startDrag(index, event) {
+    this.auto = null;
     this.drag = null;
     this.didDrag = false;
     const side = this.layout === "split" ? this.clickedSide : "new";
     if (!side || this.clicks !== 1 || this.shift || this.editorClick || this.commentGutterHit(index, side)) return;
     const anchor = contextForRow(this.display[index], this.base?.source, side);
-    if (anchor) this.drag = { anchor, position: event.position, index, display: this.display };
+    if (anchor) this.drag = { anchor, position: event.position, index, origin: index, display: this.display };
   }
   moveDrag(index, event, cx) {
     const drag = this.drag;
     if (!drag || drag.display !== this.display || index === undefined) return;
     if (this.didDrag && index === drag.index) return;
     if (!this.didDrag && Math.hypot(event.position.x - drag.position.x, event.position.y - drag.position.y) < 4) return;
-    const end = contextForRow(this.display[index], this.base?.source, drag.anchor.side);
-    const selection = rangeContext(drag.anchor, end, this.refs[drag.anchor.side]);
-    if (!selection) return;
+    this.extendDragTo(index, cx);
+  }
+  // Selection from the drag's anchor to row `index` (used by the pointer and by autoscroll).
+  extendDragTo(index, cx) {
+    const drag = this.drag;
+    if (!drag || drag.display !== this.display || index === undefined || !this.display[index]) return;
+    const side = drag.anchor.side;
+    const rangeTo = (i) => { const c = contextForRow(this.display[i], this.base?.source, side); return c ? rangeContext(drag.anchor, c, this.refs[side]) : null; };
+    let selection = rangeTo(index);
+    if (!selection) {
+      // Past a hidden gap, a file boundary or the 500-line limit: take the farthest row that still works, so the
+      // selection grows as far as it can instead of freezing. (Validity only fails going outward: binary search.)
+      const origin = drag.origin ?? drag.index, sign = Math.sign(index - origin);
+      if (!sign) return;
+      let lo = 0, hi = Math.abs(index - origin) - 1, best = null, bestIndex = origin;
+      while (lo <= hi) {
+        const mid = (lo + hi + 1) >> 1, i = origin + sign * mid, sel = mid === 0 ? null : rangeTo(i);
+        if (sel) { best = sel; bestIndex = i; lo = mid + 1; } else hi = mid - 1;
+      }
+      if (!best) return;
+      selection = best; index = bestIndex;
+    }
     if (!this.didDrag) this.handle.focus();
     this.didDrag = true;
     drag.index = index;
@@ -326,14 +384,14 @@ export class DiffTab {
     const double = this.clicks >= 2;
     const side = this.layout === "split" ? this.clickedSide : "new";
     const end = side ? contextForRow(row, this.base?.source, side) : null;
-    if (this.editorClick) {
+    if (this.editorClick && !this.isHistorical) {
       const line = end && (row.r?.n ?? row.next);
       if (line) openInEditor(cx, end.source, this.abs(row.path), line);
       return;
     }
     if (end) {
       this.handle.focus();
-      const gutter = this.commentGutterHit(i, side);
+      const gutter = !this.isHistorical && this.commentGutterHit(i, side);
       if (!gutter || this.shift || !selectionCovers(this.selection, end)) {
         if (!this.shift || !this.anchor) this.anchor = end;
         this.selection = rangeContext(this.anchor, end, this.refs[end.side]);
@@ -367,6 +425,7 @@ export class DiffTab {
     this.thread.set_props({ context: this.selection, references: this.refs[this.selection?.side] ?? [], space: this.space, focus, compose });
   }
   openComment(cx) {
+    if (this.isHistorical) return;
     this.horizontalVersion++;this.commentPosition={inset:0,width:Math.min(600,this.viewportWidth)};
     const source = this.base?.source;
     const row = this.display[this.cursor];
@@ -376,11 +435,12 @@ export class DiffTab {
     this.showComment(cx, true);
   }
   showComment(cx, compose = false) {
+    if (this.isHistorical) return;
     this.selectedRow = this.rowForComment(this.selection);
     if(this.selectedRow){this.updateThread(true, compose);this.resizeRows();cx.notify();}
   }
   badge(context,t) {
-    if(!context)return div().w(COMMENT_GUTTER).flex_none();
+    if(!context || this.isHistorical)return div().w(COMMENT_GUTTER).flex_none();
     const notes=lineComments(context), stale=notes.some(n=>isOutdated(n,this.refs[context.side]??[]));
     const selected = (this.selectionMode || this.selectedRow) && selectionCovers(this.selection, context);
     return commentGutter(t, notes.length, stale, selected);
@@ -459,7 +519,7 @@ export class DiffTab {
       .child(div().w_full().h(height).flex_none().relative().font_family(font)
         .child(split ? this.splitRow(row, t, height, breaks, index) : this.inlineRow(row, t, height, breaks?.[0], index))
         .when(Boolean(pointer), e => e.child(pointer)))
-      .when(this.selectedRow===row,e=>e.child(h_flex().w_full().child(div().w(this.commentPosition.inset + this.commentLeft(index, split)).flex_none()).child(div().w(this.commentPosition.width).flex_none().child(this.thread))));
+      .when(!this.isHistorical && this.selectedRow===row,e=>e.child(h_flex().w_full().child(div().w(this.commentPosition.inset + this.commentLeft(index, split)).flex_none()).child(div().w(this.commentPosition.width).flex_none().child(this.thread))));
   }
 
   fileFor(path) {
@@ -554,28 +614,46 @@ export class DiffTab {
       .when(r.del > 0, (e) => e.child(div().flex_none().text_size(12).font_bold().text_color(t.ansi1).child(`−${r.del}`)));
   }
 
+  // What this diff is of, as a small chip: staged vs unstaged is otherwise invisible.
+  scopeChip(t) {
+    const f = this.file;
+    if (this.isHistorical || this.comparison !== "local") return null; // the title / "vs <branch>" already say it
+    const [label, color] = this.mode === "all" ? ["Uncommitted", t.muted]
+      : f?.fresh ? ["New file", t.ansi2]
+      : ({ staged: ["Staged", t.ansi2], changes: ["Unstaged", t.ansi3], conflicts: ["Conflict", t.ansi1], head: ["vs HEAD", t.muted] }[f?.group] ?? [null]);
+    if (!label) return null;
+    return div().id("scope-chip").flex_none().px(6).h(18).flex().items_center().rounded(9).border(1).border_color(t.border).bg(t.raised)
+      .text_size(10).font_semibold().text_color(color).tooltip(`Showing the ${label.toLowerCase()} diff`).child(label);
+  }
+
   header(t, cx) {
     const view = this.base, all = this.mode === "all", f = this.file;
+    // Narrow pane: text buttons become icons (labels stay as tooltips) so nothing is cut off.
+    const compact = this.viewportWidth + (all && this.showFiles ? 250 : 0) < 780;
+    const chip = this.scopeChip(t);
     const add = this.files.reduce((n, x) => n + x.add, 0), del = this.files.reduce((n, x) => n + x.del, 0);
-    const title = all ? "All changes" : G.basename(f?.path ?? "");
-    const against = this.comparison !== "local" ? ` · vs ${this.comparisonResolved?.name ?? (this.comparison === "origin" ? "origin default branch" : this.comparison)}` : "";
+    const commit = view.commit;
+    const title = all ? (commit ? `Commit ${commit.short ?? commit.sha.slice(0, 8)}` : "All changes") : G.basename(f?.path ?? "");
+    const against = commit ? ` · ${commit.subject ?? ""}` : this.comparison !== "local" ? ` · vs ${this.comparisonResolved?.name ?? (this.comparison === "origin" ? "origin default branch" : this.comparison)}` : "";
     const sub = all ? `${this.files.length} file${this.files.length === 1 ? "" : "s"}${against}` : (f?.path?.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : "") + against;
     return h_flex().h(44).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
       .child(all ? icon("layers", 16).text_color(t.muted) : fileIcon(f?.path ?? "", 18))
       .child(div().font_bold().text_size(15).flex_none().text_color(t.foreground).child(title))
+      .when(this.isHistorical, element => element.child(div().flex_none().text_size(11).text_color(t.muted).child("Read-only commit")))
+      .when(Boolean(chip), e => e.child(chip))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(sub))
       .when(add > 0, (e) => e.child(div().text_size(12).font_bold().flex_none().text_color(t.ansi2).child(`+${add}`)))
       .when(del > 0, (e) => e.child(div().text_size(12).font_bold().flex_none().text_color(t.ansi1).child(`−${del}`)))
       .when(this.comparison !== "local", e => e
-        .child(toolButton("compare-local", "files", "Local changes", t, cx => this.setComparison("local", cx)))
+        .child(toolButton("compare-local", "files", "Local changes", t, cx => this.setComparison("local", cx), { compact }))
         .child(iconButton("compare-fetch", "refresh", t, cx => this.fetchOrigin(cx), { title: this.fetching ? "Fetching…" : "Fetch origin" })))
       .child(h_flex().flex_none().gap(2)
         .child(iconButton("lay-inline", "rows", t, (cx) => this.setLayout("inline", cx), { active: this.layout === "inline", title: "Inline" }))
         .child(iconButton("lay-split", "columns", t, (cx) => this.setLayout("split", cx), { active: this.layout === "split", title: "Side by side" })))
-      .child(toolButton("mode", all ? "file-open" : "layers", all ? "Single file" : "All changes", t, (cx) => this.setMode(all ? "file" : "all", cx, all ? (f ?? this.firstFile()) : undefined)))
-      .when(!all && Boolean(f), (e) => e
-        .child(toolButton("open-file", "file-open", "Open file", t, () => openFileTab(view.source, this.abs(f.path))))
-        .child(toolButton("open-nvim", "terminal", "Neovim", t, () => openInEditor(cx, view.source, this.abs(f.path), 1))));
+      .child(toolButton("mode", all ? "file-open" : "layers", all ? "Single file" : "All changes", t, (cx) => this.setMode(all ? "file" : "all", cx, all ? (f ?? this.firstFile()) : undefined), { compact }))
+      .when(!all && Boolean(f) && !this.isHistorical && f.status !== "D" && !this.files.find(entry => entry.path === f.path)?.deleted, (e) => e
+        .child(toolButton("open-file", "file-open", "Open file", t, () => openFileTab(view.source, this.abs(f.path)), { compact }))
+        .child(toolButton("open-nvim", "terminal", editorLabel(), t, eventCx => openInEditor(eventCx, view.source, this.abs(f.path), 1), { compact })));
   }
 
   firstFile() { const p = this.files[0]?.path; return p ? this.fileFor(p) : null; }
@@ -585,6 +663,47 @@ export class DiffTab {
     if (this.error || !this.loading) return null;
     return h_flex().h(22).flex_none().px(12).items_center().border_b(1).border_color(t.border).text_size(11).text_color(t.dim)
       .child(div().flex_none().child("Loading…"));
+  }
+
+  editorTarget() {
+    if (this.isHistorical || this.loading || !this.base?.source?.root) return null;
+    const row = this.display[this.cursor];
+    const path = this.selection?.path ?? row?.path ?? this.file?.path ?? this.files.find(entry => !entry.deleted)?.path;
+    if (!path || this.files.find(entry => entry.path === path)?.deleted || (this.file?.path === path && this.file.status === "D")) return null;
+    const codeRow = row && row.kind !== "file" && row.kind !== "@";
+    const line = this.selection?.side === "new" ? this.selection.line : codeRow ? row.r?.n ?? row.next : 1;
+    return line ? { path: this.abs(path), line } : null;
+  }
+
+  shortcutContext() {
+    return { surface: "diff", typing: false, canEdit: Boolean(this.editorTarget()),
+      canHistory: Boolean(this.base?.source?.root), editorLabel: editorLabel(),
+      canZoom: !this.pinned && Boolean(diffPane()), zoomed: Boolean(diffPane()?.zoomed) };
+  }
+
+  performShortcut(action, cx) {
+    if (action === "history" && this.base?.source?.root) showHistory(this.base.source);
+    else if (action === "zoom") zoomDiff();
+    else if (action === "edit") {
+      const target = this.editorTarget();
+      if (target) openInEditor(cx, this.base.source, target.path, target.line);
+    }
+  }
+
+  keyEvent(event, cx) {
+    if (event.key === "escape" && (this.selectedRow || this.pendingCommentOpen)) {
+      cx.stop_propagation(); this.selectedRow = null; this.pendingCommentOpen = false;
+      this.handle.focus(); this.resizeRows(); cx.notify(); return;
+    }
+    if (event.keystroke === "cmd-shift-i") { cx.stop_propagation(); this.openComment(cx); return; }
+    if (event.keystroke === "cmd-f") { cx.stop_propagation(); this.openSearch(cx); return; }
+    if (event.keystroke === "cmd-c" && this.handle.is_focused() && this.copySelection(cx)) { cx.stop_propagation(); return; }
+    if (event.keystroke === "alt-down" || event.keystroke === "alt-up") {
+      cx.stop_propagation(); this.moveChange(event.keystroke === "alt-down" ? 1 : -1, cx); return;
+    }
+    if (!event.viaApp && !this.handle.is_focused()) return;
+    const action = reviewAction(event, this.shortcutContext());
+    if (action) { cx.stop_propagation(); this.performShortcut(action, cx); }
   }
 
   render(cx) {
@@ -598,20 +717,7 @@ export class DiffTab {
       if (this.selectedRow && this.selection?.path === closeReq.path) { this.selectedRow = null; this.pendingCommentOpen = false; this.handle.focus(); this.resizeRows(); }
     }
     const shell = (children) => v_flex().id("scm-diff").track_focus(this.handle)
-      .on_key_down((e,cx)=>{
-        if (e.key === "escape" && (this.selectedRow || this.pendingCommentOpen)) {
-          cx.stop_propagation();
-          this.selectedRow = null;
-          this.pendingCommentOpen = false;
-          this.handle.focus();
-          this.resizeRows();
-          cx.notify();
-        }
-        else if(e.keystroke==="cmd-shift-i"){cx.stop_propagation();this.openComment(cx);}
-        else if(e.keystroke==="cmd-f"){cx.stop_propagation();this.openSearch(cx);}
-        else if(e.keystroke==="cmd-c"&&this.handle.is_focused()&&this.copySelection(cx)){cx.stop_propagation();}
-        else if(e.keystroke==="alt-down"||e.keystroke==="alt-up"){cx.stop_propagation();this.moveChange(e.keystroke==="alt-down"?1:-1,cx);}
-      }).size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).children(children);
+      .on_key_down((event, cx) => this.keyEvent(event, cx)).size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).children(children);
     if (!this.base) return shell([div().p(16).text_color(t.dim).child("Pick a changed file in the Changes panel.")]);
     const split = this.layout === "split";
     const font = settings().font_family ?? "JetBrains Mono";
@@ -620,7 +726,7 @@ export class DiffTab {
       range => {
         // Remember the first visible row for the pinned file header. Never notify from here: asking the view to
         // re-render while the list is rendering blanks the list. The wheel handler below refreshes the header instead.
-        this.firstVisible = range.start;
+        this.firstVisible = range.start; this.lastVisible = range.end - 1;
         return this.display.slice(range.start, range.end).map((row, offset) => {
         const index = range.start + offset;
         const slot = index % this.pointerRows.length;
@@ -644,8 +750,14 @@ export class DiffTab {
         this.commentPosition.width = Math.min(600, size.width);
         if (targetsChanged || (widthChanged && (this.wrapLines || this.selectedRow))) cx.notify();
       })
-      .on_mouse_up("left", () => { this.drag = null; })
-      .on_hover(hovered => { if (!hovered) this.drag = null; })
+      .on_mouse_up("left", () => { this.drag = null; this.auto = null; })
+      .on_hover((hovered, cx) => {
+        // Leaving the rows mid-drag no longer cancels the selection: scroll toward the edge it left by instead.
+        if (!this.drag) return;
+        if (hovered) { this.auto = null; return; }
+        const m = this.lastMove;
+        this.autoscroll(m?.bounds ? (m.y < m.bounds.y + m.bounds.height / 2 ? -1 : 1) : 0, cx);
+      })
       .on_mouse_down("left",e=>{this.commentPosition=commentPlacement(this.contentLeft??0,e.bounds?.x??0,this.contentWidth??this.viewportWidth,this.viewportWidth);})
       .text_size(FONT_SIZE)
       .on_scroll_wheel((e, cx) => {
@@ -671,18 +783,23 @@ export class DiffTab {
         })
         .on_mouse_move((e, cx) => {
           const index = this.pointerIndex(e);
-          if (this.drag) this.moveDrag(index, e, cx);
+          this.lastMove = { y: e.position.y, bounds: e.bounds };
+          if (!this.drag) return;
+          this.moveDrag(index, e, cx);
+          const b = e.bounds, edge = 26;
+          this.autoscroll(!b ? 0 : e.position.y < b.y + edge ? -1 : e.position.y > b.y + b.height - edge ? 1 : 0, cx);
         }).child(list)))
       .when(Boolean(sticky), e => e.child(sticky))
       .when(maxHx > 0, e => e.child(this.hscrollThumbs(t, maxHx)))
       .child(Scrollbar.vertical("scm-diff-rows").viewport_from_layout().absolute().inset_0());
     return shell([
-      this.header(t, cx),this.comparisonBar(t),reviewToolbar(this,t),this.commentBar(t, cx),this.footer(t),
+      this.header(t, cx),this.isHistorical?null:this.comparisonBar(t),reviewToolbar(this,t),this.commentBar(t, cx),this.footer(t),
       this.searchOpen?searchBar(this,t):null,
       this.fetchError ? div().px(12).py(6).text_size(12).text_color(t.ansi1).child(this.fetchError) : null,
       this.error ? div().px(12).py(8).text_size(12).text_color(t.ansi1).child(this.error) : null,
       !this.display.length && !this.loading && !this.error ? div().p(16).text_color(t.dim).child(this.mode==="all"?"No changes for this comparison":"No changes in this file") : h_flex().id("review-content").w_full().flex_1().min_h(0).items_stretch().overflow_hidden().child(this.mode==="all"&&this.showFiles?h_resizable("review-file-split").size_full().child(resizable_panel().size(248).size_range(160,520).child(fileNavigator(this,t))).child(resizable_panel().child(body)):body),
       this.truncated ? div().px(12).py(4).border_t(1).border_color(t.border).text_size(11).text_color(t.dim).child(`Showing the first ${MAX_ROWS.toLocaleString()} lines`) : null,
+      shortcutFooter("diff", this.shortcutContext(), (action, eventCx) => this.performShortcut(action, eventCx), t, { active: this.handle.is_focused() }),
     ].filter(Boolean));
   }
 }

@@ -45,9 +45,10 @@ In **All changes**, the **Files** icon toggles a changed-file tree. Filter by fi
 - **Words:** on by default. Changed words inside paired removed and added lines are highlighted; words separated by a space merge into one block, and a mostly rewritten line keeps only its line tint instead of a box on every word. Unusually large lines use a whole-line highlight.
 - **Ignore spaces:** hides whitespace-only changes, for both local and origin comparisons. Git's filtered context does not retain exact original whitespace, so original-side comments on unchanged context rows are unavailable in this mode. Turn it off to comment on those rows. Removed lines and current-side comments remain available.
 - **Show more lines:** expands the unchanged code around each change from three lines to ten. **Show fewer lines** returns to the compact view. Selections and drafts remain available when their lines are still visible.
-- **Wrap lines:** long lines fit the pane by default in diffs and file previews. In split view, each side wraps within its own column. Wrapped rows hang two columns past the line's own indent. Turn wrapping off to scroll horizontally; in split view both columns stay half the pane and slide together (trackpad swipe or Shift+wheel). **⌘⇧I** reveals or focuses the comment input.
+- **Wrap lines:** off by default, so long lines scroll sideways and code keeps its exact shape; turn **Wrap lines** on to fit them to the pane. In split view with wrapping off, both columns stay half the pane and slide together (trackpad swipe or Shift+wheel); with it on, each side wraps within its own column, and wrapped rows hang two columns past the line's own indent. **⌘⇧I** reveals or focuses the comment input.
 
 Search and navigation respect the 8,000-row display limit. They do not edit files, fetch, switch branches or push.
+
 
 ### Responsiveness
 
@@ -55,18 +56,53 @@ Folder-watch bursts are coalesced for 150ms. Overlapping read-only Git commands 
 
 Automated checks verify **two overlapping reads → one command load**, **25 watcher events → one scheduled refresh**, and no row rebuild for an identical diff reload. An optional synthetic benchmark (`npm run benchmark`) compares comment-badge processing with commit `efdc50b`. On one run with 20,000 lines, 50 comments and four passes, the helper took **206.83ms before / 3.18ms after** indexing. This is a helper benchmark, not a measurement of overall Herdr latency or frame rate.
 
+## Commit history
+
+Use **History** in the bottom shortcut bar to browse the current HEAD, newest first, in pages of 50 commits. Open a commit to inspect its changed files, then review one file or **Review all files** in the diff tab. Root commits compare against the empty tree; merges compare against their first parent.
+
+Historical diffs are read-only snapshots of commit objects: staged and working-tree edits never appear in them. Editor actions and inline working-tree comments are unavailable there. Existing inline/split layout, search, context and whitespace controls remain usable.
+
+### Where diffs open
+
+Clicking a file in Source Control (or moving the selection with `j` / `k`) shows its diff in a **split pane beside the pane you are working in**, not in a new tab, and reuses that one pane for the next file. The panel keeps the keyboard, so `j` / `k` / `s` / `u` keep working after a click. Zoom the pane with `z` (or `⌘⇧Enter` on it). Double-click a file for a pinned review tab of its own. To get one reusable diff *tab* instead, set Herdr's shared key `tabbed-changes.open` to `"tab"`.
+
+The diff header carries a **scope chip** (Staged, Unstaged, New file, Conflict, Uncommitted) so you can tell which diff you are looking at; comparisons against a branch and historical commits say so in the title instead. In a narrow pane the header's text buttons (All changes, Open file, editor, Local changes) collapse to icons with tooltips. Modified files use an amber status letter, added/untracked green, deleted red.
+
+### Scoped review shortcuts
+
+Bottom keycaps wrap to fit Source Control, diff, file-preview and history views, and dim while that view does not hold the keyboard (Source Control also draws an accent border while it does). Unavailable actions are disabled; text inputs and modified chords keep their existing behavior. These are review-view bindings, not global terminal bindings.
+
+| Key | View | Action |
+|---|---|---|
+| `j` / `k`, Down / Up | Source Control or history | Move the selection. |
+| Enter | Source Control, working diff or file preview | Edit the selected working file or line. |
+| `l` | Source Control, diff or file preview | Open commit history. |
+| `s` / `u` | Source Control | Stage / unstage the selected whole file when available. |
+| `z` | Source Control or diff pane | Zoom the diff pane to the full tab area (and back). Same as the pane header's zoom button or `⌘⇧Enter` on the focused pane. |
+| Enter | History | Open the selected commit, file or all-files review. |
+| `l` / Esc | History | Return to commits, or close history from the commit list. |
+
+### Selecting lines
+
+Drag across diff rows to select a range. Dragging toward the top or bottom edge scrolls the diff and keeps extending the selection; leaving the rows no longer cancels it. A range stops at the last row it can legally reach (it cannot cross hidden gaps or a file boundary, and is limited to 500 lines) instead of freezing.
+
+### Sending comments
+
+Open **Comments** at the bottom of Source Control. **Send all (N)** delivers every saved comment as one message, ordered by file and line, to the chosen agent; a single available agent is chosen for you, with several you pick one. Delivery waits for the agent to be idle or finished, and the comments are removed only after it succeeds.
+
 ## Branch switching and Git actions
 
 Click the **branch name and chevron** in Source Control to open a searchable branch picker. Beside it, a single comparison control shows the detected `origin/main` or `origin/master`. Local branches switch in place; remote branches create a local tracking branch when one does not exist. The picker identifies the current branch and branches checked out in other worktrees. If a local branch with the same name tracks a different remote branch, select that local branch explicitly rather than silently changing its upstream.
 
 Switching uses normal `git switch`: compatible uncommitted changes can carry over, and Git refuses a switch that would overwrite them. The mod does not force checkout, discard changes, or auto-stash.
 
-The Git action row below **Comments** at the bottom of Source Control provides:
+The sync row below **Comments** at the bottom of Source Control says in words what will happen, then offers the matching action:
 
-- **Fetch origin** (cloud): update remote refs without merging.
-- **Pull** (down arrow): fast-forward only from the displayed upstream, without automatic stashing.
-- **Push** (up arrow): push only the checked-out branch to its configured upstream. Hover over **Push** to see the destination.
-- **Publish branch** (cloud upload): push the current branch to `origin` under the same name and set its upstream.
+- **Status line:** `↑2 commits to push to origin/main`, `↓1 commit to pull from origin/main`, `Up to date with origin/main`, `Diverged: ↑1 ahead, ↓1 behind origin/main`, or `feature-x is not on origin yet`.
+- **Primary button** follows the state: **Push ↑N**, **Pull ↓N**, **Publish branch**, or a disabled **Up to date** / **Diverged**. Hover it for exactly what it will do.
+- **Fetch** updates remote refs without merging. **Pull** is fast-forward only, without automatic stashing, and is off while the branch has diverged.
+- **Protected branches:** pushing to `main`, `master` or the default branch needs a second click (`Push ↑2 straight to main? Click again to confirm`, with **Cancel**); other branches push at once.
+- **Result:** a green line (`✓ Pushed 2 commits to origin/main`) shows for a few seconds; failures stay in red under the list.
 
 Ahead/behind counts appear beside the branch name. Push and Pull recheck the current branch and upstream before acting; if either changed, refresh first. Push uses an explicit branch refspec and does not push unrelated branches or tags. Origin comparisons do not change the push destination. There is no force-push action.
 
@@ -82,16 +118,17 @@ The diff compares the working tree with the last commit shared by your branch an
 
 | Feature | Behavior |
 |---|---|
-| Source Control panel | Merge, Staged, and Changes sections; file icons; added/deleted counts; stage, unstage, confirmed discard, commit, push, pull, and publish branch. |
+| Source Control panel | Follows the focused terminal or review repository, including pinned/file tabs after reload. Merge, Staged, and Changes sections; file icons; added/deleted counts; stage, unstage, confirmed discard, commit, push, pull, and publish branch. |
 | Branch switching | Search local and remote branches; create tracking branches; protect conflicting local edits. |
 | Upstream Git actions | Fetch, fast-forward Pull, current-branch Push, Publish branch, and ahead/behind counts. |
 | Remote comparison | Review branch changes and local edits since the last shared commit with `origin/main` or `origin/master`. |
+| Commit history | Paginated HEAD history, changed-file lists, and immutable single-file or all-files commit reviews. |
 | Inline feedback | Comment on lines/ranges, show gutter badges and outdated warnings, and send context to a Herdr agent. |
 | Tabbed diffs | Single-click reuses the **Changes** tab. Double-click pins a separate tab labeled with the filename. |
 | All changes | Review changed files in one scrolling view with collapsible file headers. |
 | Inline and side-by-side diffs | Old/new line numbers, added/deleted highlights, and syntax coloring. |
 | File views | Whole-file previews with added, modified, and deleted-line gutter markers. |
-| Neovim integration | **⌘-click** a line in a diff or file preview to open it in your editor with your own configuration, LSP, plugins, and keymaps. In diffs, the shortcut opens lines that have a counterpart in the working file. |
+| Neovim integration | Reuses the selected Herdr tab's persistent embedded editor with your configuration, LSP, plugins and keymaps. **⌘-click** also opens lines with a working-file counterpart. |
 | File-type icons | Material Icon Theme icons in the panel and tab headers. |
 
 ### Review views
@@ -108,7 +145,7 @@ The diff compares the working tree with the last commit shared by your branch an
 
 ## Install
 
-Requires Git 2.x with `git switch` support and a compatible Herdr app. Developed and checked on macOS with Herdr 0.1.12. Neovim is optional; it is only needed for the editor action.
+Requires Git 2.x with `git switch` support, a compatible Herdr app, and its `herdr-core` CLI on PATH for read-only review-pane metadata lookup. Developed and checked on macOS with Herdr 0.1.12. Neovim is optional; it is only needed for the editor action.
 
 From this repository:
 
@@ -132,7 +169,7 @@ The internal mod ID, folder, layout references, asset paths, and saved-state key
 
 ### Use another terminal editor
 
-The default is `nvim`. Set Herdr's shared key `tabbed-changes.editor` to an executable such as `vim`, `hx`, or an absolute executable path. The terminal editor brings its own language-server support; this mod does not provide an LSP client.
+The local default is `nvim`, using the existing `herdr-nvim` companion rather than creating a terminal tab for each file. Set Herdr's shared key `tabbed-changes.editor` to an executable such as `vim`, `hx`, or an absolute executable path to choose another editor. A custom editor, a remote source, or an absent companion uses the plain terminal-editor path. A failure from an installed companion is reported instead of silently opening another tab. This mod does not provide its own LSP client.
 
 ## Development and validation
 
@@ -143,9 +180,11 @@ npm run check:herdr
 npm run benchmark
 ```
 
-No npm dependencies are required. Tests cover Git parsing, syntax coloring, icons, line/range context, comment scoping, stale snapshots, guarded delivery, and successful-send cleanup. Also exercise the UI in Herdr: the native check does not cover every deferred row or interaction. See [RECIPE.md](RECIPE.md) for a source-based build brief and [docs/PUBLISHING.md](docs/PUBLISHING.md) for publishing.
+No npm dependencies are required. The nine test scripts cover Git parsing, syntax coloring, icons, line/range context, comment scoping, stale snapshots, guarded delivery, history pagination/root/merge commits, unusual paths/metadata, immutable patches and context-expansion boundaries, scoped keyboard decisions, and repository selection for pinned/file/preview and standalone Source Control tabs. `check:herdr` loads the real mod once; it does not exercise every deferred row or interaction. See [RECIPE.md](RECIPE.md) for implementation details and [docs/PUBLISHING.md](docs/PUBLISHING.md) for publishing.
 
-The earlier comment UI, ranges, keyboard shortcut, badges, and changed-code warnings were checked in a running Herdr app. The latest navigation/diff pass has automated native materialization and integration checks; live visual/pointer verification was deferred at the user's request. A real idle-agent delivery still needs end-to-end verification; send success/failure and cleanup rules are covered by tests.
+Automated live checks opened history without native runtime errors and exercised Enter through the installed mod: the selected file opened at line 1 in the same existing Neovim window, with no added or removed terminals. The original editor buffer, cursor, viewport, layout and focus were restored. Native icon installation passed its staged check and a second installation was a no-op.
+
+Visual/pointer verification is not claimed: Herdr's screenshot API returned a cached frame during this pass. A real idle-agent delivery still needs end-to-end verification; send success/failure and cleanup rules remain covered by tests.
 
 ## Limits
 

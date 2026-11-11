@@ -23,6 +23,15 @@ assert.equal(calls[0][1],'t1','a finished (done) agent is sendable, without the 
 await assert.rejects(()=>C.deliverComments({notes:[note],target:'t1',space:'s1',agents:[{...target,status:'working'}],send:async()=>assert.fail()}),/idle/i);
 await assert.rejects(()=>C.deliverComments({notes:[note],target:'t1',space:'s2',agents:[target],send:async()=>assert.fail()}),/agent/i);
 await assert.rejects(()=>C.deliverComments({notes:[note],target:'t1',space:'s1',agents:[target],send:async()=>({code:1,stderr:'offline'})}),/offline/);
+// batch: one message, all removed afterwards; nothing removed when delivery fails
+{ const store=[{...note,id:'a'},{...note,id:'b'},{...note,id:'c'}]; const sent=[];
+  await C.sendAllAndRemove({notes:store.slice(0,2),target:'t1',space:'s1',agents:[target],send:async args=>{sent.push(args);return {code:0};},read:()=>store,write:next=>{store.splice(0,store.length,...next);}});
+  assert.equal(sent.length,1,'one message for the whole batch'); assert.deepEqual(store.map(n=>n.id),['c']);
+  await assert.rejects(()=>C.sendAllAndRemove({notes:store,target:'t1',space:'s1',agents:[target],send:async()=>({code:1,stderr:'offline'}),read:()=>store,write:()=>assert.fail()}),/offline/); assert.equal(store.length,1,'kept after a failed send'); }
+assert.equal(C.defaultTarget('t1',[{address:'t1'},{address:'t2'}]),'t1','keeps a still-valid choice');
+assert.equal(C.defaultTarget(null,[{address:'t2'}]),'t2','the only agent is preselected');
+assert.equal(C.defaultTarget(null,[{address:'t1'},{address:'t2'}]),null,'several agents: no silent default');
+assert.equal(C.defaultTarget('gone',[]),null);
 console.log('comments ok');
 assert.equal(typeof C.forLine,'function','comments must be attached to individual lines');
 assert.equal(C.forLine([note,{...note,id:'2',line:10}],context).length,1);

@@ -1,11 +1,12 @@
-// Opening things in tabs: the reusable "preview" diff tab (VS Code's single-click behaviour),
-// pinned diff tabs (double-click), read-only file tabs, and terminal-editor (Neovim) tabs.
-import { run, spaces, shared, setShared } from "herdr";
-import { basename, editorArgv } from "./git.js";
+// Opening things in tabs: the reusable preview diff, pinned reviews, file previews,
+// and the commit-history dialog. Editor handoff lives in editor.js.
+import { run, spaces, shared, setShared, openOverlay, panes, focused } from "herdr";
+import { basename } from "./git.js";
 
 export const MOD = "tabbed-changes";
-export const VIEW_KEY = "tabbed-changes.view";   // { [spaceId]: { view, tab, at } } -> what the preview diff tab shows
-export const EDITOR_KEY = "tabbed-changes.editor"; // shared override, e.g. "nvim", "/opt/homebrew/bin/hx"
+export const VIEW_KEY = "tabbed-changes.view";   // { [spaceId]: { view, tab, pane?, at } } -> what the preview diff shows
+export const OPEN_KEY = "tabbed-changes.open";   // "pane" (default): a split pane beside the focused one; "tab": a tab of its own
+export const openMode = () => (shared(OPEN_KEY) === "tab" ? "tab" : "pane");
 
 export const activeSpace = () => spaces().find((s) => s.active);
 const tabIds = (spaceId) => new Set(spaces().find((s) => s.id === spaceId)?.tabs.map((t) => t.id) ?? []);
@@ -17,32 +18,87 @@ function newTab(spaceId, args) {
   return [...tabIds(spaceId)].find((id) => !before.has(id)) ?? null;
 }
 
-// A view is { source: { root, on }, mode: "file" | "all", file?: { group, path, status, fresh } }.
+// A view is { source, mode, file?, comparison?, commit?: {sha, short, subject} }.
 export function previewView(spaceId) { return shared(VIEW_KEY)?.[spaceId]?.view ?? null; }
 
-// Single click: show `view` in the space's one reusable diff tab, making it if it is gone.
-// `pinned`: a tab of its own that nothing else reuses.
+// The pane to split beside: the focused one if it is in `tab`, else the tab's last pane.
+function paneBeside(tab) {
+  const f = focused(), all = panes().filter((p) => p.tab === tab);
+  return all.find((p) => p.pane === f?.pane)?.pane ?? all.at(-1)?.pane ?? null;
+}
+
+// The live diff pane of a preview entry. `run("pane.split")` returns nothing and the pane appears a moment later,
+// so an entry made in pane mode may not know its pane id yet: then it is the one mod pane of ours in that tab.
+function diffPaneOf(entry) {
+  if (entry?.pane) return panes().find((p) => p.pane === entry.pane) ?? null;
+  return entry?.paneMode ? panes().find((p) => p.tab === entry.tab && p.mod === MOD) ?? null : null;
+}
+
+// Pane mode (like herdr-gitview): the diff is a split pane beside the one you are working in, not a tab, so the
+// terminal stays visible, the pane can be zoomed (cmd-shift-enter) and the panel keeps the keyboard. One diff pane
+// per space; later clicks only change what it shows. Returns { pane, created } or null when it cannot split.
+function showDiffInPane(space, view) {
+  const tab = focused()?.tab ?? space.tabs.find((t) => t.active)?.id ?? null;
+  if (!tab) return null;
+  const all = { ...(shared(VIEW_KEY) ?? {}) };
+  const entry = all[space.id], at = Date.now();
+  const live = diffPaneOf(entry);
+  if (live && live.tab === tab) {
+    all[space.id] = { ...entry, pane: live.pane, view, at };
+    setShared(VIEW_KEY, all);
+    return { pane: live.pane, created: false };
+  }
+  if (live) run("pane.close", { pane: live.pane }); // it is in another tab, where you cannot see it
+  const beside = paneBeside(tab);
+  if (!beside) return null;
+  const before = new Set(panes().map((p) => p.pane));
+  run("pane.split", { direction: "right", pane: beside, mod: MOD, props: { role: "diff", space: space.id, paneMode: true } });
+  const made = panes().find((p) => !before.has(p.pane) && p.mod === MOD)?.pane ?? null;
+  // `tab` set, `pane` maybe not yet: the diff pane claims it itself on start (DiffTab.claim).
+  all[space.id] = { view, tab, pane: made, paneMode: true, at };
+  setShared(VIEW_KEY, all);
+  return { pane: made, created: true };
+}
+
+// Single click: show `view` in the space's one reusable diff (a split pane, or a tab in "tab" mode), making it if it
+// is gone. `pinned`: a tab of its own that nothing else reuses.
 export function showDiff(view, { pinned = false, select = true } = {}) {
   const space = activeSpace();
-  if (!space) return;
-  const name = pinned && view.mode === "file" && view.file?.path
-    ? `Changes · ${basename(view.file.path)}` : "Changes";
+  if (!space) return null;
+  const name = view.commit
+    ? `Commit ${view.commit.short ?? view.commit.sha?.slice(0, 8) ?? "review"}${view.mode === "file" && view.file?.path ? ` · ${basename(view.file.path)}` : ""}`
+    : pinned && view.mode === "file" && view.file?.path ? `Changes · ${basename(view.file.path)}` : "Changes";
   if (pinned) {
     newTab(space.id, { name, mod: MOD, props: { role: "diff", pinned: true, view } });
-    return;
+    return null;
+  }
+  if (openMode() === "pane") {
+    const shown = showDiffInPane(space, view);
+    if (shown) return shown;
   }
   const all = { ...(shared(VIEW_KEY) ?? {}) };
   const entry = all[space.id];
-  const live = entry?.tab && space.tabs.find((t) => t.id === entry.tab);
+  const live = !entry?.pane && entry?.tab && space.tabs.find((t) => t.id === entry.tab);
   all[space.id] = { view, tab: live ? live.id : null, at: Date.now() };
   setShared(VIEW_KEY, all);
   if (live) {
     run("tab.rename", { id: live.id, name });
     if (select) run("tab.select", { id: live.id });
-    return;
+    return { tab: live.id, created: false };
   }
   const id = newTab(space.id, { name, mod: MOD, props: { role: "diff", space: space.id } });
   if (id) setShared(VIEW_KEY, { ...(shared(VIEW_KEY) ?? {}), [space.id]: { view, tab: id, at: all[space.id].at } });
+  return { tab: id, created: true };
+}
+
+// The diff pane this space shows (pane mode), if it is still there; `z` and the footer zoom it.
+export function diffPane() {
+  const space = activeSpace();
+  return space ? diffPaneOf(shared(VIEW_KEY)?.[space.id]) : null;
+}
+export function zoomDiff() {
+  const pane = diffPane();
+  if (pane) run("pane.zoom", { pane: pane.pane });
 }
 
 // Keeps the preview tab's view current without stealing focus (staging moved the file, say).
@@ -59,18 +115,8 @@ export function openFileTab(source, path, line) {
   run("tab.new", { name: basename(path), space: space.id, mod: MOD, props: { role: "file", file: path, root: source.root, on: source.on ?? null, line: line ?? null } });
 }
 
-// The terminal editor: the shared override, else Neovim (it brings its own LSP).
-const editorName = () => {
-  const forced = shared(EDITOR_KEY);
-  return typeof forced === "string" && forced.trim() ? forced.trim() : "nvim";
-};
-
-// Opens `path` (absolute) at `line` in a new tab running the editor. No install check up front:
-// if the editor is missing the tab prints why and exits non-zero, which Herdr shows as an error toast.
-export function openInEditor(_cx, source, path, line) {
-  const space = activeSpace();
-  if (!space) return;
-  const editor = editorName(), argv = editorArgv(editor, path, line);
-  const script = `command -v "$1" >/dev/null 2>&1 || { printf '%s\\n' "$1 is not installed (or not on PATH). Install it, or set shared key tabbed-changes.editor to another editor."; exit 127; }; exec "$@"`;
-  run("tab.new", { name: basename(path), space: space.id, folder: source.root, argv: ["sh", "-c", script, "sh", ...argv] });
+export function showHistory(source) {
+  if (!source?.root) return;
+  openOverlay({ mod: MOD, kind: "dialog", width: 740, height: 660, props: { role: "history", source } });
 }
+

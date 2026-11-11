@@ -2,7 +2,8 @@
 import { View, div } from 'gpui-kit';
 import { v_flex, h_flex, TextareaState, Textarea } from 'gpui-base';
 import { spaces, agents, shared, setShared, theme, hc } from 'herdr';
-import { makeComment, forSource, forLine, sendAndRemove, isOutdated, lineLabel } from './comment-model.js';
+import { makeComment, forSource, forLine, sendAndRemove, sendAllAndRemove, defaultTarget, isOutdated, lineLabel } from './comment-model.js';
+export { defaultTarget };
 import { icon } from './ui.js';
 
 const KEY = 'tabbed-changes.comments.v1';
@@ -18,6 +19,8 @@ export const CLOSE_THREAD_KEY = 'tabbed-changes.close-thread';
 export const removeSavedComment = id => setShared(KEY, allNotes().filter(note => note.id !== id));
 export const sendSavedComment = (note, target, space) =>
   sendAndRemove({ note, target, space, agents: agents(), send: args => hc(args), read: allNotes, write: next => setShared(KEY, next) });
+export const sendSavedComments = (notes, target, space) =>
+  sendAllAndRemove({ notes, target, space, agents: agents(), send: args => hc(args), read: allNotes, write: next => setShared(KEY, next) });
 // The virtual row reserves the same space before and after saving.
 export const INLINE_COMMENT_HEIGHT = 220;
 export const commentButton = (id, text, t, action, { active = false, primary = false, enabled = true } = {}) =>
@@ -110,6 +113,7 @@ export class InlineComments extends View {
   }
   saved(t, notes) {
     const idle = idleCommentAgents(this.space);
+    this.target = defaultTarget(this.target, idle);
     const canSend = !this.busy && idle.some(a => a.address === this.target);
     return v_flex().flex_1().min_h(0).gap(6)
       .child(h_flex().h(28).flex_none().gap(10).items_center()

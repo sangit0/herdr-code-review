@@ -133,7 +133,7 @@ The diff compares the working tree with the last commit shared by your branch an
 
 ### Review views
 
-![Inline review thread with a saved comment, selected agent, and Esc hint](docs/screenshots/diff.png)
+![Inline review thread with a saved comment and the selection bar below the diff](docs/screenshots/diff.png)
 
 ![Comments overview showing a saved review comment and agent actions](docs/screenshots/comments.png)
 

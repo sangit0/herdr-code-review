@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node tests/git.test.mjs && node tests/comments.test.mjs && node tests/comparison.test.mjs && node tests/branches.test.mjs && node tests/read-cache.test.mjs && node tests/review-model.test.mjs",
+    "test": "node tests/git.test.mjs && node tests/comments.test.mjs && node tests/comparison.test.mjs && node tests/branches.test.mjs && node tests/read-cache.test.mjs && node tests/review-model.test.mjs && node tests/history.test.mjs && node tests/shortcuts.test.mjs",
     "benchmark": "node tests/benchmark-review.mjs",
     "check:herdr": "node tests/native-check.mjs"
   },

@@ -12,9 +12,9 @@ export function reviewToolbar(view,t) {
     .child(iconButton('next-change','arrow-down',t,cx=>view.moveChange(1,cx),{title:'Next change (Alt+Down)'}))
     .child(div().id('change-count').text_size(11).text_color(t.dim).tooltip(view.commentHint()).child(`${view.changeIndices.length} changes`))
     .child(div().flex_1())
-    .child(toolButton('word-highlights','columns','Words',t,cx=>{view.wordHighlight=!view.wordHighlight;cx.notify();},{active:view.wordHighlight,compact}))
-    .child(toolButton('ignore-whitespace','rows','Ignore spaces',t,cx=>view.setDiffOption('ignoreWhitespace',!view.ignoreWhitespace,cx),{active:view.ignoreWhitespace,compact}))
-    .child(toolButton('wrap-lines', 'rows', 'Wrap lines', t, cx => {
+    .child(toolButton('word-highlights','words','Words',t,cx=>{view.wordHighlight=!view.wordHighlight;cx.notify();},{active:view.wordHighlight,compact}))
+    .child(toolButton('ignore-whitespace','whitespace','Ignore spaces',t,cx=>view.setDiffOption('ignoreWhitespace',!view.ignoreWhitespace,cx),{active:view.ignoreWhitespace,compact}))
+    .child(toolButton('wrap-lines', 'wrap', 'Wrap lines', t, cx => {
       view.wrapLines = !view.wrapLines;
       view.hx = 0;
       view.horizontalVersion++;

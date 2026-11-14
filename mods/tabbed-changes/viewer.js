@@ -10,7 +10,10 @@ import { readGit, invalidateReads, REPOSITORY_EVENT } from "./repository.js";
 import * as G from "./git.js";
 import { toolButton, codeLine, fileIcon, commentGutter, inCommentGutter, CODE_ROW as ROW } from "./ui.js";
 import { wrapBreaks, wrapColumns, hangFor } from "./review-model.js";
-import { openInEditor, showDiff } from "./tabs.js";
+import { showDiff, showHistory } from "./tabs.js";
+import { openInEditor, editorLabel } from "./editor.js";
+import { reviewAction } from "./shortcut-model.js";
+import { shortcutFooter } from "./shortcuts.js";
 
 const MAX_LINES = 20000, FONT_SIZE = 13, GUTTER_START = 52;
 
@@ -22,7 +25,7 @@ export class FileTab {
     this.line = p.line ?? null; this.selected = null; this.anchor = null; this.selection = null; this.shift = false;
     this.selectionVisible = false;
     this.handle=cx.focus_handle(); this.refreshQueue=new Coalescer(); this.referenceRows=[];this.fileWidth=400;this.rowSizes=ROW;this.metadataDirty=true;
-    this.wrapLines = true;
+    this.wrapLines = false;
     this.viewportWidth = 600;
     this.thread = cx.new(InlineComments);
     this.ready = false; this.lines = []; this.marks = {}; this.deletedBefore = new Set(); this.changed = 0;
@@ -160,6 +163,37 @@ export class FileTab {
   }
   close() { this.watched=null;this.refreshQueue.cancel();this.thread.release(); }
 
+  canEdit() { return Boolean(this.file) && this.ready; }
+  shortcutContext() {
+    return {
+      surface: "file", typing: !this.handle.is_focused(), canEdit: this.canEdit(),
+      canStage: false, canUnstage: false, canOpen: false,
+      canHistory: Boolean(this.source.root), historyMode: null, editorLabel: editorLabel(),
+    };
+  }
+  performAction(action, cx) {
+    if (action === "edit" && this.canEdit()) openInEditor(cx, this.source, this.file, this.line ?? 1);
+    else if (action === "history" && this.source.root) showHistory(this.source);
+  }
+  keyEvent(e, cx) {
+    if (e.key === "escape" && this.selected !== null) {
+      cx.stop_propagation();
+      this.selected = null;
+      this.handle.focus();
+      cx.notify();
+      return;
+    }
+    if (e.keystroke === "cmd-shift-i") {
+      cx.stop_propagation();
+      this.openComment(cx);
+      return;
+    }
+    const action = reviewAction(e, this.shortcutContext());
+    if (!action) return;
+    cx.stop_propagation();
+    this.performAction(action, cx);
+  }
+
   changesView(t) {
     this.updateSizes();
     const width=this.fileWidth;
@@ -190,17 +224,7 @@ export class FileTab {
     const t = theme(), has = this.changed > 0 || this.deletedBefore.size > 0, rel = this.rel();
     const name = G.basename(this.file ?? "File");
     return v_flex().id("scm-file").track_focus(this.handle)
-      .on_key_down((e, cx) => {
-        if (e.key === "escape" && this.selected !== null) {
-          cx.stop_propagation();
-          this.selected = null;
-          this.handle.focus();
-          cx.notify();
-        } else if (e.keystroke === "cmd-shift-i") {
-          cx.stop_propagation();
-          this.openComment(cx);
-        }
-      }).size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground)
+      .on_key_down((e, cx) => this.keyEvent(e, cx)).size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground)
       .child(h_flex().h(44).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
         .child(fileIcon(this.file ?? "", 18))
         .child(div().font_bold().text_size(15).flex_none().child(name))
@@ -211,8 +235,9 @@ export class FileTab {
           cx.notify();
         }, { active: this.wrapLines })))
         .when(has && Boolean(rel), (e) => e.child(toolButton("open-diff", "columns", "Diff", t, () => showDiff({ source: this.source, mode: "file", file: { group: "head", path: rel } }))))
-        .when(Boolean(this.file), (e) => e.child(toolButton("open-editor", "terminal", "Neovim", t, () => openInEditor(cx, this.source, this.file, this.line)))))
+        .when(Boolean(this.file), (e) => e.child(toolButton("open-editor", "terminal", editorLabel(), t, (cx) => openInEditor(cx, this.source, this.file, this.line)))))
       .when(!this.ready, (e) => e.child(div().flex_1().p(14).text_color(t.dim).child(this.error || (this.loading ? "Loading file…" : "File unavailable"))))
-      .when(this.ready, (e) => e.child(this.changesView(t)));
+      .when(this.ready, (e) => e.child(this.changesView(t)))
+      .child(shortcutFooter("file", this.shortcutContext(), (action, cx) => this.performAction(action, cx), t));
   }
 }

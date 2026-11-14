@@ -3,39 +3,73 @@
 // (single click reuses one preview tab, double click gets a tab of its own).
 import { div } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea } from "gpui-base";
-import { spaces, panes, focused, exec, watchFolder, theme, shared, openOverlay } from "herdr";
+import { spaces, panes, focused, exec, watchFolder, theme, shared, openOverlay, run } from "herdr";
 import { pushCurrent, pullCurrent, branchTarget, BRANCH_EVENT } from "./branches.js";
 import { Coalescer } from "./read-cache.js";
 import { readGit, invalidateReads, invalidateRepository, REPOSITORY_EVENT } from "./repository.js";
 import { resolveOrigin } from "./comparison.js";
 import * as G from "./git.js";
-import { VIEW_KEY, showDiff, updatePreview, openFileTab, openInEditor } from "./tabs.js";
+import { VIEW_KEY, showDiff, updatePreview, openFileTab, showHistory, diffPane, zoomDiff } from "./tabs.js";
 import { iconButton, toolButton, icon, fileIcon } from "./ui.js";
 import { commentsFor } from "./comments.js";
+import { openInEditor, editorLabel } from "./editor.js";
+import { reviewAction } from "./shortcut-model.js";
+import { shortcutFooter } from "./shortcuts.js";
 
-// Where the panel looks: the focused terminal's folder. A diff or file tab (a mod pane with no
-// folder) keeps whatever repository the panel already shows.
-function location(previous, root) {
+const REVIEW_SOURCE_ROLES = new Set(["diff", "file", "history", "branches", "comments"]);
+
+// Terminals provide their cwd. Review panes provide a source in their saved props;
+// a pinned/file view must not inherit an unrelated preview or space folder.
+function location(previous, root, sourceOn) {
   const space = spaces().find((s) => s.active), f = focused();
   const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
   if (pane?.mod === "tabbed-changes" && space) {
     const entry = shared(VIEW_KEY)?.[space.id];
     const source = entry?.tab === pane.tab ? entry.view?.source : null;
-    if (source?.root) {
-      const on = source.on ?? null;
-      if (previous && root === source.root && previous.on === on) return previous;
-      return { cwd: source.root, on };
-    }
+    if (source?.root) return { space: space.id, cwd: source.root, on: source.on ?? null };
+    return { space: space.id, tab: pane.tab, reviewPane: pane.pane, on: space.machine ?? null };
   }
-  if (pane && pane.terminal === null && previous) return previous;
+  if (space && pane && pane.terminal === null && previous?.space === space.id) {
+    return root ? { space: space.id, cwd: root, on: sourceOn ?? null } : previous;
+  }
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
-  return { cwd: pane?.cwd || f?.cwd || space?.folder, on };
+  return { space: space?.id ?? null, cwd: pane?.cwd || f?.cwd || space?.folder, on };
+}
+
+function findPane(node, id) {
+  if (node?.id === id) return node;
+  for (const child of node?.children ?? []) {
+    const found = findPane(child, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+async function readReviewLocation(request) {
+  const query = { id: 1, method: "doc.get", params: { name: "herdr-app", ...(request.on ? { on: request.on } : {}) } };
+  const result = await exec("/bin/sh", ["-c", 'printf "%s\\n" "$1" | herdr-core connect', "herdr-review-source", JSON.stringify(query)]);
+  if (result.code !== 0) throw new Error(G.tidy(result.stderr || result.stdout) || "Could not read the focused review's repository.");
+  const reply = JSON.parse(result.stdout);
+  if (reply.error) throw new Error(reply.error.message);
+  const localId = id => request.on && id.startsWith(`${request.on}/`) ? id.slice(request.on.length + 1) : id;
+  const space = reply.result?.value?.spaces?.find(space => space.id === localId(request.space));
+  const tab = space?.tabs?.find(tab => tab.id === localId(request.tab));
+  const content = findPane(tab?.root, localId(request.reviewPane))?.content;
+  if (content?.mod !== "tabbed-changes") throw new Error("The focused review is no longer available.");
+  const props = content.props;
+  if (!REVIEW_SOURCE_ROLES.has(props?.role)) return { cwd: space.folder, on: request.on ?? null };
+  const source = props.role === "diff"
+    ? props.pinned ? props.view?.source : shared(VIEW_KEY)?.[request.space]?.view?.source
+    : props.role === "file" ? props : props.source;
+  if (!source?.root) throw new Error("The focused review has no repository source.");
+  return { cwd: source.root, on: source.on ?? null };
 }
 
 export class Panel {
   init(cx) {
     this.staged = []; this.changes = []; this.conflicts = []; this.branch = null; this.originBase=null;
     this.message = ""; this.collapsed = {}; this.hover = null; this.confirm = null; this.loc = null;
+    this.cursorKey = null;
     this.handle = cx.focus_handle(); this.refreshQueue=new Coalescer();
     this.input = TextareaState.new({ placeholder: "Message (⌘Enter to commit)" });
     this.input.set_auto_grow(2, 6);
@@ -52,7 +86,7 @@ export class Panel {
   }
 
   get all() { return [...this.conflicts, ...this.staged, ...this.changes]; }
-  key() { this.loc = location(this.loc, this.root); return JSON.stringify(this.loc); }
+  key() { this.loc = location(this.loc, this.root, this.on); return JSON.stringify(this.loc); }
   source() { return { root: this.root, on: this.on ?? null }; }
 
   watch(root, cx) {
@@ -71,17 +105,23 @@ export class Panel {
 
   reset() {
     this.root = null; this.staged = []; this.changes = []; this.conflicts = []; this.branch = null; this.originBase=null;
-    this.message = ""; this.input.set_value(""); this.error = null; this.note = null; this.watched = null; this.limited = false; this.confirm = null;
+    this.message = ""; this.input.set_value(""); this.error = null; this.note = null; this.watched = null; this.limited = false; this.confirm = null; this.cursorKey = null;
+    this.reviewLocation = null;
   }
 
   refresh(cx) {
     if (this.loading || this.busy) { this.dirty = true; return; }
-    const context = this.key(), { cwd, on } = this.loc;
+    const context = this.key(), request = this.loc;
     if (context !== this.context) { this.context = context; this.reset(); }
-    if (!cwd) return;
+    if (!request.cwd && !request.reviewPane) return;
     this.loading = true; this.dirty = false;
     cx.spawn(async (cx) => {
       try {
+        const resolved = request.reviewPane ? this.reviewLocation ?? await readReviewLocation(request) : request;
+        if (this.key() !== context) return;
+        if (request.reviewPane) this.reviewLocation = resolved;
+        const { cwd, on } = resolved;
+        if (!cwd) return;
         const top = await readGit({root:cwd,on},["rev-parse", "--show-toplevel"]);
         if (this.key() !== context) return;
         if (top.code !== 0) { this.root = null; this.staged = []; this.changes = []; this.conflicts = []; this.branch = null; this.originBase=null; this.error = "Not a git repository"; return; }
@@ -105,6 +145,7 @@ export class Panel {
         this.originBase=originBase;
         this.root = root; this.on = on; this.hasHead = head.code === 0;
         Object.assign(this, { branch: parsed.branch, staged: parsed.staged, changes: parsed.changes, conflicts: parsed.conflicts, limited: parsed.limited, error: null });
+        this.syncCursor();
         this.watch(root, cx);
         this.followPick();
       } catch (e) { if (this.key() === context) this.error = String(e); }
@@ -130,7 +171,9 @@ export class Panel {
   pick(f, clicks, cx) {
     if (!this.root) return;
     this.confirm = null;
-    showDiff({ source: this.source(), mode: "file", file: { group: f.group, path: f.path, status: f.status, fresh: f.fresh } }, { pinned: clicks >= 2 });
+    this.cursorKey = `${f.group}:${f.path}`;
+    const shown = showDiff({ source: this.source(), mode: "file", file: { group: f.group, path: f.path, status: f.status, fresh: f.fresh } }, { pinned: clicks >= 2 });
+    if (shown?.created && "pane" in shown) this.reclaimKeyboard(cx);
     cx.notify();
   }
   compareOrigin(cx) { if(this.root&&this.originBase&&!this.busy&&!this.loading)showDiff({source:this.source(),mode:"all",comparison:this.originBase.name});cx.notify(); }
@@ -138,25 +181,109 @@ export class Panel {
   openFile(f) { if (this.root) openFileTab(this.source(), `${this.root}/${f.path}`); }
   openEditor(f, cx) { if (this.root) openInEditor(cx, this.source(), `${this.root}/${f.path}`, 1); }
 
+  selectedFile() {
+    const rows = this.all;
+    return rows.find(file => `${file.group}:${file.path}` === this.cursorKey) ?? rows[0] ?? null;
+  }
+
+  syncCursor() {
+    const previousPath = this.cursorKey?.slice(this.cursorKey.indexOf(":") + 1);
+    const rows = this.all;
+    const file = rows.find(row => `${row.group}:${row.path}` === this.cursorKey) ??
+      rows.find(row => row.path === previousPath) ?? rows[0];
+    this.cursorKey = file ? `${file.group}:${file.path}` : null;
+  }
+
+  focus() {
+    const space = spaces().find(entry => entry.active);
+    const view = space && shared(VIEW_KEY)?.[space.id]?.view;
+    if (view?.source?.root === this.root && !view.commit && view.mode === "file" && view.file) {
+      const file = this.all.find(row => row.path === view.file.path && row.group === view.file.group) ??
+        this.all.find(row => row.path === view.file.path);
+      if (file) this.cursorKey = `${file.group}:${file.path}`;
+    }
+    this.syncCursor();
+    this.focusedAt = Date.now();
+    this.handle.focus();
+  }
+
+  // Opening a diff split a new pane beside this one and the app focused it. Take the keyboard straight back (the
+  // app's own focus, via pane.go, so only one thing looks focused and j/k/s/u keep working), a few tries at most.
+  reclaimKeyboard(cx) {
+    this.focusedAt = 0;
+    let tries = 0;
+    const attempt = () => {
+      if (Date.now() - this.focusedAt < 2000 || tries++ >= 5) return;
+      // From the diff pane, which sits at the tab's right edge beside this panel, `go right` lands here.
+      const pane = diffPane()?.pane;
+      if (pane) run("pane.focus", { pane });
+      run("pane.go", { direction: "right" });
+      cx.timer.after(300, attempt);
+    };
+    cx.timer.after(250, attempt);
+  }
+
+  moveSelection(delta, cx) {
+    const rows = this.all;
+    if (!rows.length || this.loading || this.busy) return;
+    const current = Math.max(0, rows.findIndex(file => `${file.group}:${file.path}` === this.cursorKey));
+    const file = rows[Math.max(0, Math.min(rows.length - 1, current + delta))];
+    this.pick(file, 1, cx);
+    cx.timer.after(0, () => this.handle.focus());
+  }
+
+  shortcutContext() {
+    const file = this.selectedFile(), ready = Boolean(this.root && !this.busy && !this.loading);
+    return { surface: "panel", typing: Boolean(this.typing),
+      canEdit: ready && Boolean(file) && file.status !== "D",
+      canHistory: ready, canStage: ready && Boolean(file) && file.group !== "staged",
+      canUnstage: ready && file?.group === "staged", editorLabel: editorLabel(),
+      canZoom: Boolean(diffPane()), zoomed: Boolean(diffPane()?.zoomed) };
+  }
+
+  performShortcut(action, cx) {
+    const file = this.selectedFile(), available = this.shortcutContext();
+    if (action === "previous") this.moveSelection(-1, cx);
+    else if (action === "next") this.moveSelection(1, cx);
+    else if (action === "history" && available.canHistory) showHistory(this.source());
+    else if (action === "zoom" && available.canZoom) zoomDiff();
+    else if (action === "edit" && available.canEdit) this.openEditor(file, cx);
+    else if (action === "stage" && available.canStage) this.stage([file], cx);
+    else if (action === "unstage" && available.canUnstage) this.unstage([file], cx);
+  }
+
+  keyEvent(event, cx) {
+    if (event.key === "escape") {
+      if (this.confirm) { this.confirm = null; cx.stop_propagation(); cx.notify(); return; }
+      if (this.typing) { this.typing = false; this.handle.focus(); cx.stop_propagation(); cx.notify(); return; }
+    }
+    if (event.key === "enter" && (event.modifiers?.platform || event.modifiers?.control) && this.typing) {
+      cx.stop_propagation(); this.commit(cx); return;
+    }
+    if ((!event.viaApp && !this.handle.is_focused()) || this.confirm) return;
+    const action = reviewAction(event, this.shortcutContext());
+    if (action) { cx.stop_propagation(); this.performShortcut(action, cx); }
+  }
+
   chooseBranch() {
     if(!this.root||this.busy||this.loading)return;
     openOverlay({mod:"tabbed-changes",kind:"dialog",width:520,height:420,props:{role:"branches",source:this.source()}});
   }
-  fetch(cx) { this.work(cx,"Fetch",git=>git(["fetch","--no-tags","origin"],["GIT_TERMINAL_PROMPT=0"])); }
+  fetch(cx) { this.work(cx,"Fetch",git=>git(["fetch","--no-tags","origin"],["GIT_TERMINAL_PROMPT=0"]),"Fetched origin"); }
 
   // --- git writes -------------------------------------------------------------------------------
   // Runs git writes one after another, then refreshes. Failures show under the list.
-  work(cx, label, job) {
+  work(cx, label, job, doneText) {
     if (!this.root || this.busy || this.context !== this.key()) return;
     const root = this.root, on = this.on, context = this.context;
-    this.busy = label; this.note = null; this.confirm = null;
+    this.busy = label; this.note = null; this.confirm = null; this.pushConfirm = false; this.result = null;
     const git = async (args, env = []) => {
       const r = env.length ? await exec("env", [...env, "git", ...G.WRITE, ...args], { cwd: root, on }) : await exec("git", [...G.WRITE, ...args], { cwd: root, on });
       if (r.code !== 0) throw new Error(G.tidy(r.stderr || r.stdout) || `git ${args[0]} failed`);
       return r;
     };
     cx.spawn(async (cx) => {
-      try { await job(git); }
+      try { await job(git); if (doneText && this.key() === context) this.flash(doneText, cx); }
       catch (e) { if (this.key() === context) this.note = `${label} failed: ${e.message ?? e}`; }
       finally { invalidateRepository({root,on}); this.busy = null; this.refresh(cx); cx.notify(); }
     });
@@ -188,14 +315,37 @@ export class Panel {
       if (this.key() === context) { this.message = ""; this.input.set_value(""); }
     });
   }
+  // A short success line under the buttons; it clears itself.
+  flash(text, cx) {
+    const token = this.flashToken = (this.flashToken ?? 0) + 1;
+    this.result = text; cx.notify();
+    cx.timer.after(6000, () => { if (this.flashToken === token) { this.result = null; cx.notify(); } });
+  }
+  isProtected(name) {
+    const base = this.originBase?.name?.split("/").slice(1).join("/");
+    return name === "main" || name === "master" || Boolean(base && name === base);
+  }
+  // First click on a protected branch only arms the button ("Push to main?"); the second one pushes.
+  requestPush(cx) {
+    const b = this.branch;
+    if (!b || b.detached || this.busy || this.loading) return;
+    if (this.isProtected(b.name) && !this.pushConfirm) {
+      this.pushConfirm = true; cx.notify();
+      cx.timer.after(6000, () => { if (this.pushConfirm) { this.pushConfirm = false; cx.notify(); } });
+      return;
+    }
+    this.push(cx);
+  }
   push(cx) {
     const b = this.branch;
     if (!b || b.detached) return;
-    this.work(cx, "Push", git => pushCurrent(async args => (await git(args,["GIT_TERMINAL_PROMPT=0"])).stdout,{name:b.name,upstream:b.upstream}));
+    const n = b.ahead ?? 0, done = b.upstream ? `Pushed ${n} commit${n === 1 ? "" : "s"} to ${b.upstream}` : `Published ${b.name} to origin`;
+    this.work(cx, "Push", git => pushCurrent(async args => (await git(args,["GIT_TERMINAL_PROMPT=0"])).stdout,{name:b.name,upstream:b.upstream}), done);
   }
   pull(cx) {
     const b=this.branch;if(!b||b.detached||!b.upstream)return;
-    this.work(cx,"Pull",git=>pullCurrent(async args=>(await git(args,["GIT_TERMINAL_PROMPT=0"])).stdout,{name:b.name,upstream:b.upstream}));
+    const n = b.behind ?? 0;
+    this.work(cx,"Pull",git=>pullCurrent(async args=>(await git(args,["GIT_TERMINAL_PROMPT=0"])).stdout,{name:b.name,upstream:b.upstream}), `Pulled ${n} commit${n === 1 ? "" : "s"} from ${b.upstream}`);
   }
 
   // --- drawing ----------------------------------------------------------------------------------
@@ -206,18 +356,18 @@ export class Panel {
       .child(label);
   }
 
-  statusColor(s, t) { return s === "A" || s === "U" ? t.ansi2 : s === "D" || s === "!" ? t.ansi1 : t.blocked; }
+  statusColor(s, t) { return s === "A" || s === "U" ? t.ansi2 : s === "D" || s === "!" ? t.ansi1 : s === "R" ? t.ansi4 : t.ansi3; }
 
   fileRow(f, t, shown) {
     const parts = f.path.split("/"), name = parts.pop(), id = `${f.group}:${f.path}`;
-    const selected = shown?.group === f.group && shown?.path === f.path && shown?.mode !== "all";
+    const selected = this.keyboardFocused ? this.cursorKey === id : shown?.group === f.group && shown?.path === f.path && shown?.mode !== "all";
     const hovered = this.hover === id, confirming = this.confirm === id;
     const actions = [];
     if (confirming) {
       actions.push(this.pill(`ok-${id}`, f.fresh ? "Delete file" : "Discard", t, (cx) => this.discard([f], cx)));
     } else if (hovered) {
       if (f.status !== "D") {
-        actions.push(iconButton(`nvim-${id}`, "terminal", t, (cx) => this.openEditor(f, cx), { title: "Open in Neovim" }));
+        actions.push(iconButton(`nvim-${id}`, "terminal", t, (cx) => this.openEditor(f, cx), { title: `Open in ${editorLabel()}` }));
         actions.push(iconButton(`open-${id}`, "file-open", t, () => this.openFile(f), { title: "Open file in a tab" }));
       }
       if (f.group === "changes") actions.push(iconButton(`discard-${id}`, "undo", t, (cx) => { this.confirm = id; cx.notify(); }, { title: "Discard changes" }));
@@ -267,62 +417,121 @@ export class Panel {
     return h_flex().h(36).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border)
       .child(div().flex_1().text_size(11).font_semibold().text_color(t.muted).child("SOURCE CONTROL"))
       .when(Boolean(this.root), e => e
+        .when(Boolean(this.originBase), el => el.child(iconButton("compare-default-branch", "columns", t, cx => this.compareOrigin(cx), { title: `Review changes against ${this.originBase.name}` })))
+        .child(this.commentsButton(t))
+        .child(iconButton("review-history", "history", t, () => showHistory(this.source()), { title: "Commit history (l)" }))
         .child(iconButton("all-changes","file-diff",t,cx=>this.openAll(cx),{title:"Open all changes"}))
         .child(iconButton("refresh","refresh",t,cx=>this.refresh(cx),{title:"Refresh Source Control"})));
   }
+  // The review comments live in a small header icon beside History; the count rides on it as a badge.
+  commentsButton(t) {
+    const space = spaces().find((s) => s.active)?.id, count = commentsFor(this.source()).length;
+    const open = () => openOverlay({ mod: "tabbed-changes", kind: "dialog", width: 580, height: 450, props: { role: "comments", source: this.source(), space } });
+    return div().relative().flex_none()
+      .child(iconButton("open-review-comments", "comment", t, open, { title: count ? `Review comments (${count})` : "Review comments", color: count ? t.accent : undefined, size: 22 }))
+      .when(count > 0, e => e.child(div().absolute().top(-2).right(-3).min_w(13).h(13).px(3).rounded(7).bg(t.accent).text_color(t.accent_foreground)
+        .flex().items_center().justify_center().text_size(9).font_semibold().child(count > 9 ? "9+" : String(count))));
+  }
   branchBar(t) {
-    const b=this.branch;
-    return h_flex().flex_none().px(10).py(6).gap(5).items_center().border_b(1).border_color(t.border)
-        .child(h_flex().id("checkout-branch").flex_1().min_w(0).gap(5).items_center().cursor_pointer().rounded(3).hover(s=>s.bg(t.hover))
-          .tooltip("Checkout branch…").on_click(()=>this.chooseBranch())
-          .child(icon("branch",14).text_color(t.accent))
-          .child(div().flex_1().min_w(0).truncate().child(b?.name??"Select repository"))
-          .child(icon("chevron-down",12).text_color(t.dim)))
-        .when(Boolean(this.root&&this.originBase),el=>el.child(toolButton("compare-default-branch","columns",this.originBase.name,t,cx=>this.compareOrigin(cx))
-          .tooltip(`Review changes against ${this.originBase.name}`)))
-        .when(Boolean(b?.upstream),el=>el.child(div().flex_none().text_size(11).text_color(t.muted).child(`↓${b.behind} ↑${b.ahead}`)));
+    const b=this.branch, sync=this.remoteActions(t);
+    const branch = h_flex().id("checkout-branch").flex_1().min_w(0).h(26).px(6).gap(6).items_center().cursor_pointer().rounded(6).hover(s=>s.bg(t.hover))
+      .tooltip("Checkout branch…").on_click(()=>this.chooseBranch())
+      .child(icon("branch",14).text_color(t.accent))
+      .child(div().flex_1().min_w(0).truncate().font_semibold().child(b?.name??"Select repository"));
+    // While confirming a push to main, the confirm bar takes the whole row.
+    const row = sync.arming ? sync.control : h_flex().gap(6).items_center().child(branch).child(sync.control);
+    return v_flex().flex_none().px(8).pt(8).pb(6).gap(6).border_t(1).border_color(t.border).child(row).when(sync.show, e => e.child(sync.notes));
   }
 
+  // Fetch / Pull / Push (or Publish) as one segmented control under the branch, plus a one-line status that only
+  // speaks when there is something to say. Pushing to main/master needs a second click, and the result is said afterwards.
   remoteActions(t) {
-    const b=this.branch,enabled=Boolean(b&&!b.detached&&this.hasHead&&!this.busy&&!this.loading);
-    return h_flex().flex_none().px(10).py(6).gap(4).items_center().border_t(1).border_color(t.border)
-        .child(iconButton("fetch","cloud",t,cx=>this.fetch(cx),{title:"Fetch origin"}))
-        .child(iconButton("pull","arrow-down",t,cx=>{if(enabled&&b.upstream)this.pull(cx);},{color:enabled&&b?.upstream?t.muted:t.dim,title:b?.upstream?`Pull from ${b.upstream} (fast-forward only)`:"Pull requires an upstream branch"}))
-        .child(h_flex().id("push-branch").h(24).px(6).gap(5).flex_1().min_w(0).items_center().rounded(3)
-          .bg(t.raised).text_color(enabled?t.accent:t.dim).when(enabled,e=>e.cursor_pointer()).hover(s=>s.bg(t.hover))
-          .tooltip(b?.upstream?`Push ${b.name} to ${b.upstream}`:`Publish ${b?.name??"branch"} to origin`)
-          .on_click((_e,cx)=>{if(enabled)this.push(cx);})
-          .child(icon(b?.upstream?"arrow-up":"cloud-upload",13))
-          .child(div().flex_1().min_w(0).truncate().text_size(11).child(this.busy?`${this.busy}…`:b?.upstream?"Push":"Publish branch")));
+    const b = this.branch, usable = Boolean(b && !b.detached && this.hasHead), free = usable && !this.busy && !this.loading;
+    const up = b?.upstream, ahead = b?.ahead ?? 0, behind = b?.behind ?? 0, plural = (n) => (n === 1 ? "" : "s");
+    const state = !usable ? "none" : !up ? "publish" : ahead && behind ? "diverged" : ahead ? "push" : behind ? "pull" : "synced";
+    const arming = this.pushConfirm && (state === "push" || state === "publish");
+    const status = arming ? `Push ${state === "push" ? `↑${ahead} ` : ""}straight to ${b.name}? Click again to confirm` : {
+      none: !b ? "No repository" : b.detached ? "Detached HEAD: check out a branch to sync" : "Make a commit to enable push",
+      publish: `${b?.name} is not on origin yet`,
+      diverged: `Diverged: ↑${ahead} ahead, ↓${behind} behind ${up}`,
+      push: `↑${ahead} commit${plural(ahead)} to push to ${up}`,
+      pull: `↓${behind} commit${plural(behind)} to pull from ${up}`,
+      synced: `Up to date with ${up}`,
+    }[state];
+    const loud = arming || state === "diverged";
+    const tone = loud ? t.ansi3 : t.dim;
+    // One segment: icon + short label, filled when it is the action to take now.
+    const segment = (id, label, iconName, { onClick, enabled, primary = false, warn = false, tip, first = false }) => {
+      const on = enabled && primary, fill = warn ? t.ansi3 : t.accent;
+      return h_flex().id(id).flex_1().min_w(0).h(28).px(6).gap(5).items_center().justify_center()
+        .when(!first, e => e.border_l(1).border_color(t.border))
+        .bg(on ? fill : t.raised).text_color(on ? t.accent_foreground : enabled ? t.foreground : t.dim).text_size(11).font_semibold()
+        .when(enabled, e => e.cursor_pointer().hover(s => s.opacity(0.85)).on_click((_e, cx) => onClick(cx)))
+        .when(Boolean(tip), e => e.tooltip(tip)).child(icon(iconName, 13)).child(div().truncate().child(label));
+    };
+    const busy = this.busy ? `${this.busy}…` : null;
+    const group = (...segments) => h_flex().w_full().rounded(7).border_1().border_color(t.border).overflow_hidden().children(segments);
+    const pullable = free && Boolean(up) && behind > 0 && ahead === 0;
+    let row, menu = null;
+    if (arming) {
+      row = group(
+        segment("push-cancel", "Cancel", "minus", { enabled: true, first: true, onClick: (cx) => { this.pushConfirm = false; cx.notify(); } }),
+        segment("push-confirm", state === "push" ? `Push ↑${ahead} to ${b.name}` : `Publish ${b.name}`, "arrow-up", { enabled: free, primary: true, warn: true, onClick: (cx) => this.requestPush(cx) }));
+    } else {
+      const pushable = free && (state === "push" || state === "publish");
+      // Like Zed: one button for what you most likely want next, and a chevron for the rest.
+      const next = state === "publish" ? { label: "Publish", icon: "cloud-upload", enabled: free, primary: true, go: (cx) => this.requestPush(cx), tip: `Publish ${b?.name} to origin and track it` }
+        : state === "push" ? { label: `Push ↑${ahead}`, icon: "arrow-up", enabled: free, primary: true, go: (cx) => this.requestPush(cx), tip: `Push ${b?.name} to ${up}` }
+        : state === "pull" ? { label: `Pull ↓${behind}`, icon: "arrow-down", enabled: pullable, primary: true, go: (cx) => this.pull(cx), tip: `Fast-forward ${b?.name} from ${up}` }
+        : state === "diverged" ? { label: "Diverged", icon: "arrow-up", enabled: false, go: () => {}, tip: "Both sides have new commits: rebase or merge in a terminal" }
+        : { label: "Fetch", icon: "refresh", enabled: free, go: (cx) => this.fetch(cx), tip: "Fetch origin (updates remote branches, changes nothing local)" };
+      const mainOn = next.enabled && next.primary && !busy;
+      const chevronOn = Boolean(usable);
+      row = h_flex().rounded(7).border_1().border_color(t.border).overflow_hidden()
+        .child(h_flex().id("sync-main").flex_none().h(26).px(8).gap(6).items_center().justify_center()
+          .bg(mainOn ? t.accent : t.raised).text_color(mainOn ? t.accent_foreground : next.enabled ? t.foreground : t.dim).text_size(11).font_semibold()
+          .when(next.enabled && !busy, e => e.cursor_pointer().hover(s => s.opacity(0.85)).on_click((_e, cx) => { this.syncMenu = false; next.go(cx); }))
+          .tooltip(next.tip).child(icon(busy ? "refresh" : next.icon, 13)).child(div().truncate().child(busy ?? next.label)))
+        .child(div().id("sync-menu-toggle").w(26).h(26).flex_none().flex().items_center().justify_center().border_l(1).border_color(mainOn ? t.accent : t.border)
+          .bg(mainOn ? t.accent : t.raised).text_color(mainOn ? t.accent_foreground : t.muted)
+          .when(chevronOn, e => e.cursor_pointer().hover(s => s.opacity(0.85)).on_click((_e, cx) => { this.syncMenu = !this.syncMenu; cx.notify(); }))
+          .tooltip("Fetch, Pull, Push…").child(icon(this.syncMenu ? "chevron-down" : "chevron-down", 13)));
+      if (this.syncMenu && chevronOn) {
+        const item = (id, label, iconName, detail, enabled, go) => h_flex().id(id).w_full().h(30).px(10).gap(8).items_center().rounded(5)
+          .text_size(12).text_color(enabled ? t.foreground : t.dim)
+          .when(enabled, e => e.cursor_pointer().hover(s => s.bg(t.hover)).on_click((_e, cx) => { this.syncMenu = false; go(cx); }))
+          .child(icon(iconName, 14)).child(div().flex_1().min_w(0).truncate().child(label))
+          .child(div().flex_none().text_size(11).text_color(t.dim).child(detail));
+        menu = v_flex().id("sync-menu").absolute().bottom(30).right(0).w(190).p(4).gap(1).rounded(8).border_1().border_color(t.border).bg(t.raised)
+          .on_hover((on, cx) => { if (!on && this.syncMenu) { this.syncMenu = false; cx.notify(); } })
+          .child(item("menu-fetch", "Fetch", "refresh", "origin", free, (cx) => this.fetch(cx)))
+          .child(item("menu-pull", "Pull", "arrow-down", behind ? `↓${behind}` : "", pullable, (cx) => this.pull(cx)))
+          .child(item("menu-push", state === "publish" ? "Publish branch" : "Push", "arrow-up", ahead ? `↑${ahead}` : "", pushable, (cx) => this.requestPush(cx)));
+      }
+    }
+    const say = loud || state === "none";
+    const notes = v_flex().flex_none().gap(4)
+      .when(say, e => e.child(h_flex().id("sync-status").gap(5).items_center().text_size(11).text_color(tone).tooltip(status)
+        .child(div().flex_1().min_w(0).truncate().child(status))))
+      .when(Boolean(this.result), e => e.child(h_flex().gap(5).items_center().text_size(11).text_color(t.ansi2)
+        .child(icon("check", 12)).child(div().flex_1().min_w(0).truncate().child(this.result))));
+    return { control: div().relative().flex_none().when(arming, e => e.w_full()).child(row).when(Boolean(menu), e => e.child(menu)), notes, arming, show: say || Boolean(this.result) };
   }
 
   commitBox(t) {
     const count = this.staged.length;
     const enabled = Boolean(this.message.trim() && count > 0 && this.root && !this.busy && !this.loading);
-    const label = this.busy === "Commit" ? "Committing…" : count ? `Commit ${count} staged` : "Commit";
-    return v_flex().flex_none().p(10).gap(8).border_b(1).border_color(t.border)
-      .child(div().id("commit-message").w_full().px(10).py(6).rounded(8).border_1().border_color(this.typing ? t.accent : t.border).cursor_text()
+    const label = this.busy === "Commit" ? "Committing…" : count ? `Commit ${count}` : "Commit";
+    return v_flex().flex_none().px(8).pb(8).child(
+      v_flex().id("commit-message").w_full().rounded(8).border_1().border_color(this.typing ? t.accent : t.border).bg(t.background).overflow_hidden().cursor_text()
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-        .child(Textarea.new(this.input).w_full().text_size(12).text_color(t.foreground)))
-      .child(div().id("commit").w_full().h(30).flex().items_center().justify_center().rounded(8)
-        .bg(enabled ? t.solid : t.raised).text_color(enabled ? t.solid_foreground : t.dim).text_size(12).font_semibold()
-        .when(enabled, (e) => e.cursor_pointer()).on_click((_e, cx) => this.commit(cx)).child(icon("check",13)).child(div().ml(5).child(label)))
-      .when(Boolean(this.message.trim()) && !count && Boolean(this.root) && !this.loading, (e) => e.child(div().text_size(11).text_color(t.dim).child("Stage changes with + to commit them")));
-  }
-
-  commentsBar(t, space) {
-    const count = commentsFor(this.source()).length;
-    return div().flex_none().px(8).py(6).border_t(1).border_color(t.border)
-      .child(h_flex().id("open-review-comments").w_full().h(30).px(8).gap(7).items_center().rounded(5)
-        .cursor_pointer().bg(t.raised).hover(style => style.bg(t.hover))
-        .on_click(() => openOverlay({
-          mod: "tabbed-changes", kind: "dialog", width: 580, height: 450,
-          props: { role: "comments", source: this.source(), space },
-        }))
-        .child(icon("comment", 14).text_color(count ? t.accent : t.muted))
-        .child(div().flex_1().font_semibold().text_size(12).child("Comments"))
-        .child(div().min_w(19).px(5).rounded(8).bg(count ? t.selected : t.background)
-          .text_center().text_size(11).text_color(count ? t.accent : t.muted).child(String(count))));
+        .child(div().w_full().px(10).pt(7).pb(2).child(Textarea.new(this.input).w_full().text_size(12).text_color(t.foreground)))
+        .child(h_flex().w_full().px(6).pb(6).gap(6).items_center()
+          .child(div().flex_1())
+          .child(h_flex().id("commit").h(26).px(10).gap(5).items_center().justify_center().rounded(6).flex_none()
+            .bg(enabled ? t.solid : t.raised).text_color(enabled ? t.solid_foreground : t.dim).text_size(11).font_semibold()
+            .when(enabled, (e) => e.cursor_pointer().hover(s => s.opacity(0.88))).on_click((_e, cx) => this.commit(cx))
+            .child(icon("check",13)).child(div().child(label)))));
   }
 
   render(cx) {
@@ -332,25 +541,20 @@ export class Panel {
     const t = theme();
     const space = spaces().find((s) => s.active), entry = space && shared(VIEW_KEY)?.[space.id];
     const shown = entry?.view?.source?.root === this.root ? { ...entry.view.file, mode: entry.view.mode } : null;
+    this.keyboardFocused = this.handle.is_focused();
     const visible = G.SECTIONS.map((s) => ({ ...s, files: this[s.id] })).filter((s) => s.files.length > 0);
     const list = v_flex().id("scm-list").flex_1().min_h(0).p(6).gap(2).overflow_y_scrollbar()
       .children(visible.flatMap((s) => [this.sectionHeader(s, s.files, t), ...(this.collapsed[s.id] ? [] : s.files.map((f) => this.fileRow(f, t, shown)))]))
       .when(!visible.length, (e) => e.child(div().p(8).text_color(t.dim).child(this.error || (this.loading ? "Loading changes…" : this.root ? "No uncommitted changes" : "No folder"))))
       .when(this.limited, (e) => e.child(div().px(8).py(4).text_size(11).text_color(t.dim).child(`Showing the first ${G.LIMIT.toLocaleString()} changed files`)));
 
-    return v_flex().id("scm-panel").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
-      .on_key_down((e, cx) => {
-        if (e.key === "escape") {
-          if (this.confirm) { this.confirm = null; cx.stop_propagation(); cx.notify(); }
-          else if (this.typing) { this.typing = false; this.handle.focus(); cx.stop_propagation(); cx.notify(); }
-        } else if (e.key === "enter" && (e.modifiers.platform || e.modifiers.control) && this.typing) {
-          cx.stop_propagation(); this.commit(cx);
-        }
-      })
+    return v_flex().id("scm-panel").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(this.keyboardFocused ? t.accent : t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
+      .on_mouse_down("left", () => this.handle.focus())
+      .on_key_down((event, cx) => this.keyEvent(event, cx))
       .child(this.headerBar(t))
-      .when(Boolean(this.root), e => e.child(this.branchBar(t)).child(this.commitBox(t)))
       .child(list)
-      .when(Boolean(this.root), e => e.child(this.commentsBar(t, space?.id)).child(this.remoteActions(t)))
-      .when(Boolean(this.note), (e) => e.child(div().px(10).py(6).border_t(1).border_color(t.border).text_size(11).text_color(t.ansi1).child(this.note)));
+      .when(Boolean(this.root), e => e.child(this.branchBar(t)).child(this.commitBox(t)))
+      .when(Boolean(this.note), (e) => e.child(div().px(10).py(6).border_t(1).border_color(t.border).text_size(11).text_color(t.ansi1).child(this.note)))
+      .child(shortcutFooter("panel", this.shortcutContext(), (action, cx) => this.performShortcut(action, cx), t, { active: this.keyboardFocused }));
   }
 }

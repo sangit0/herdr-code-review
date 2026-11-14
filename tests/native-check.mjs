@@ -25,7 +25,7 @@ try {
  }`);
  check(output => {
   assert.ok(output.includes('Not a git repository'));
-  for (const id of ['all-changes', 'refresh', 'checkout-branch', 'push-branch', 'commit-message', 'open-review-comments']) {
+  for (const id of ['all-changes', 'refresh', 'checkout-branch', 'sync-main', 'sync-menu-toggle', 'commit-message', 'open-review-comments', 'compare-default-branch']) {
    assert.ok(!output.includes(`Str("${id}")`), `repository control shown without a repository: ${id}`);
   }
  });
@@ -35,13 +35,12 @@ try {
   check(output=>{
    const lines=output.split('\n'),checkout=lines.findIndex(l=>l.includes('Str("checkout-branch")')),compare=lines.findIndex(l=>l.includes('Str("compare-default-branch")'));
    assert.ok(checkout>=0);
-   assert.ok(lines.findIndex(l=>l.includes('Str("open-review-comments")')) >
-     lines.findIndex(l=>l.includes('Str("scm-list")')), 'comments belong below the changes list');
-   const comments=lines.findIndex(l=>l.includes('Str("open-review-comments")'));
-   for(const id of ['fetch','pull','push-branch']){
-    assert.ok(lines.findIndex(l=>l.includes(`Str("${id}")`))>comments,`${id} belongs below Comments`);
-   }
-   if(base){assert.ok(compare>checkout);assert.equal(lines[checkout].match(/^ */)[0].length,lines[compare].match(/^ */)[0].length,'comparison belongs beside checkout');assert.ok(output.includes('text '+JSON.stringify(base)));assert.ok(!output.includes('text '+JSON.stringify(base==='origin/main'?'origin/master':'origin/main')));}
+   const at=id=>lines.findIndex(l=>l.includes(`Str("${id}")`)), list=at('scm-list');
+   assert.ok(at('open-review-comments')>=0 && at('open-review-comments')<list,'comments is an icon in the header, above the changes list');
+   assert.ok(checkout>list,'branch row sits below the changes list');
+   for(const id of ['sync-main','sync-menu-toggle']) assert.ok(at(id)>checkout,`${id} belongs beside the branch, below the list`);
+   assert.ok(at('commit')>at('sync-main'),'commit box sits below the sync row');
+   if(base){assert.ok(compare>=0&&compare<list,'comparison is a header icon');}
    else assert.equal(compare,-1);
   });
  }

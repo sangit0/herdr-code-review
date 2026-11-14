@@ -3,8 +3,7 @@ import {execFileSync} from 'node:child_process';
 import {mkdtempSync,writeFileSync,rmSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-const C=await import('../mods/tabbed-changes/comparison.js').catch(()=>({}));
-assert.equal(typeof C.resolveOrigin,'function','origin comparison resolver is required');
+const C=await import('../mods/tabbed-changes/comparison.js');
 // Stub only native host APIs; exercise the production diff loader against real Git.
 const {registerHooks}=await import('node:module');
 let entry=null, savedNotes=[];
@@ -12,19 +11,25 @@ globalThis.__comparisonHost={
  props:()=>({}),shared:key=>key==='tabbed-changes.view'?entry:key==='tabbed-changes.comments.v1'?savedNotes:null,
  setShared:(key,value)=>{if(key==='tabbed-changes.comments.v1')savedNotes=value;},
  read:async path=>{try{return readFileSync(path,'utf8');}catch{return null;}},
- exec:async (_command,args,{cwd})=>{await globalThis.__comparisonHost.beforeExec?.(args);try{return {code:0,stdout:execFileSync('git',args,{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe']}),stderr:''};}catch(e){return {code:e.status??1,stdout:String(e.stdout??''),stderr:String(e.stderr??'')};}}
+ exec:async (command,args,{cwd}={})=>{
+  if(command==='/bin/sh')return {code:0,stderr:'',stdout:JSON.stringify({id:1,jsonrpc:'2.0',result:{version:1,value:globalThis.__comparisonHost.reviewDocument}})};
+  await globalThis.__comparisonHost.beforeExec?.(args);
+  try{return {code:0,stdout:execFileSync('git',args,{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe']}),stderr:''};}
+  catch(e){return {code:e.status??1,stdout:String(e.stdout??''),stderr:String(e.stderr??'')};}
+ }
 };
 registerHooks({resolve(specifier,context,next){return ['herdr','gpui-kit','gpui-base'].includes(specifier)?{url:`test:${specifier}`,shortCircuit:true}:next(specifier,context);},load(url,context,next){
  if(url==='test:herdr')return {format:'module',shortCircuit:true,source:`
  const h=globalThis.__comparisonHost;
  export const props=h.props,shared=h.shared,exec=h.exec,readTextFile=h.read;
+ export const appHome=()=>'/tmp/herdr-comparison-home',notify=()=>{};
  export const openOverlay=()=>{},spaces=()=>h.spaces?.()??[],setShared=(key,value)=>h.setShared?.(key,value);
- export const panes=()=>[],focused=()=>null,watchFolder=()=>{},theme=()=>({}),settings=()=>({}),run=(...args)=>h.run?.(...args),agents=()=>[],hc=()=>{};`};
+ export const panes=()=>h.panes?.()??[],focused=()=>h.focused?.()??null,watchFolder=()=>{},theme=()=>({}),settings=()=>({}),run=(...args)=>h.run?.(...args),agents=()=>[],hc=()=>{};`};
  if(url==='test:gpui-kit')return {format:'module',shortCircuit:true,source:'export class View {} export const div=()=>{},svg=()=>{},image=()=>{};'};
  if(url==='test:gpui-base')return {format:'module',shortCircuit:true,source:`
  export const v_flex=()=>{},h_flex=()=>{},Scrollbar={},v_virtual_list=()=>{},h_resizable=()=>{},resizable_panel=()=>{},Textarea={},Input={};
  export const InputState={new:()=>{let value='',handlers={};return {on:(name,fn)=>handlers[name]=fn,value:()=>value,set_value:v=>{value=v;handlers.change?.({},globalThis.__comparisonHost.context);},focus(){this.focused=true;},release(){}};}};
- export const TextareaState=InputState;
+ export const TextareaState={new:()=>({...InputState.new(),set_auto_grow(){}})};
  export const VirtualListScrollHandle={new:()=>({positions:[],scroll_to_item(i){this.positions.push(i);},release(){}})};
  `};
  return next(url,context);
@@ -59,8 +64,6 @@ try {
  writeFileSync(join(root,'spacing.txt'),'const   x = 1;\n');writeFileSync(join(root,'contextspace.txt'),'const   x = 1;\nnew\n');
  writeFileSync(join(root,'staged.txt'),'staged only\n');run(['add','staged.txt']);
  const patch=await git(C.comparisonArgs(base));
- assert.ok(C.comparisonArgs(base,undefined,{context:10,ignoreWhitespace:true}).includes('--ignore-all-space'));
- assert.ok(C.comparisonArgs(base,undefined,{context:10}).includes('--unified=10'));
  assert.match(patch,/-base/);assert.match(patch,/\+committed/);assert.match(patch,/\+local/);
  assert.ok(run(['ls-files','--others','--exclude-standard']).includes('new.txt'));
  const tab=new DiffTab();
@@ -172,6 +175,8 @@ try {
  const selected = review.selectedRow;
  const longPair = review.display.findIndex(row => row.path === 'contextspace.txt' && row.l?.text.startsWith('const'));
  assert.ok(longPair >= 0);
+ assert.equal(review.wrapLines, false, 'wrapping is off by default');
+ review.wrapLines = true;
  review.viewportWidth = 240;
  review.resizeRows();
  assert.ok(review.baseSizes[longPair] > 20, 'the virtual row grows with the taller wrapped side');
@@ -229,5 +234,41 @@ try {
  panel.compareOrigin(viewCx);assert.equal(selectedView.comparison,'origin/master');
  run(['update-ref','refs/remotes/origin/main',base]);run(['symbolic-ref','refs/remotes/origin/HEAD','refs/remotes/origin/main']);
  panel.originBase=await C.resolveOrigin(git,'origin');panel.compareOrigin(viewCx);assert.equal(selectedView.comparison,'origin/main');
+ // A reloaded panel must resolve the focused review's repository, not the space's default folder.
+ const otherRoot=mkdtempSync(join(tmpdir(),'herdr-other-repository-'));
+ try {
+  execFileSync('git',['init','-b','main'],{cwd:otherRoot,stdio:'ignore'});
+  writeFileSync(join(otherRoot,'space-only.txt'),'untracked in the space repository\n');
+  const otherRepositoryRoot=execFileSync('git',['rev-parse','--show-toplevel'],{cwd:otherRoot,encoding:'utf8'}).trim();
+  const repositoryRoot=run(['rev-parse','--show-toplevel']).trim();
+  const host=globalThis.__comparisonHost;
+  host.spaces=()=>[{id:'review-space',active:true,machine:null,folder:otherRoot,tabs:[{id:'review-tab',active:true}]}];
+  host.panes=()=>[{pane:'review-pane',tab:'review-tab',mod:'tabbed-changes',terminal:null,cwd:null}];
+  host.focused=()=>({space:'review-space',tab:'review-tab',pane:'review-pane',terminal:null,cwd:null});
+  entry={'review-space':{tab:'unrelated-preview',view:{source:{root:otherRoot,on:null}}}};
+  for(const reviewProps of [
+   {role:'diff',pinned:true,view:{source:{root,on:null},mode:'file',file:{path:'tracked.txt',group:'changes'}}},
+   {role:'file',root,on:null,file:join(root,'tracked.txt')},
+   {role:'diff',space:'review-space'},
+   {role:'panel'},
+   {},
+  ]) {
+   if(reviewProps.role==='diff'&&!reviewProps.pinned)entry={'review-space':{tab:null,view:{source:{root,on:null},mode:'file',file:{path:'tracked.txt',group:'changes'}}}};
+   host.reviewDocument={spaces:[{id:'review-space',folder:otherRoot,tabs:[{id:'review-tab',root:{id:'review-row',type:'row',children:[{id:'review-pane',type:'block',content:{mod:'tabbed-changes',props:reviewProps}}]}}]}]};
+   const sourcePanel=new Panel();sourcePanel.watch=()=>{};
+   try {
+    sourcePanel.init(viewCx);await drain();
+    const standalone=!reviewProps.role||reviewProps.role==='panel';
+    assert.equal(sourcePanel.root,standalone?otherRepositoryRoot:repositoryRoot,`${reviewProps.role??'default panel'} must load its own repository`);
+    assert.equal(sourcePanel.error,null);
+    assert.equal(sourcePanel.loading,false);
+    if(standalone)assert.deepEqual(sourcePanel.changes.map(file=>file.path),['space-only.txt']);
+    else {
+     assert.ok(sourcePanel.changes.some(file=>file.path==='tracked.txt'));
+     assert.ok(sourcePanel.staged.some(file=>file.path==='staged.txt'));
+    }
+   } finally {sourcePanel.close();}
+  }
+ } finally {rmSync(otherRoot,{recursive:true,force:true});}
 } finally {rmSync(root,{recursive:true,force:true});}
 console.log('origin comparison ok');

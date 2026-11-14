@@ -102,18 +102,32 @@ export function pairRows(rows) {
   return out;
 }
 
-// One `git diff` over many files -> [{ path, lines, add, del, binary }]. Renames are off, so a == b.
+// Git C-quotes control characters and represents quoted UTF-8 bytes as octal escapes.
+const PATH_ESCAPES = { a: "\x07", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v", '"': '"', "\\": "\\" };
+function unquoteGitPath(token) {
+  let encoded = "";
+  for (const part of token.slice(1, -1).match(/\\(?:[0-7]{1,3}|[abfnrtv"\\])|[^\\]/gu) ?? []) {
+    if (part[0] !== "\\") encoded += encodeURIComponent(part);
+    else if (/^[0-7]/.test(part[1])) encoded += `%${parseInt(part.slice(1), 8).toString(16).padStart(2, "0")}`;
+    else encoded += encodeURIComponent(PATH_ESCAPES[part[1]]);
+  }
+  return decodeURIComponent(encoded);
+}
+
+// One `git diff` over many files -> [{ path, lines, add, del, binary, deleted }]. Renames are off, so a == b.
 export function splitPatch(text) {
   const files = [];
   const blocks = text.split(/^diff --git /m).slice(1);
   for (const block of blocks) {
     const lines = block.replace(/\n$/, "").split("\n");
     const head = lines[0], n = (head.length - 5) / 2;
-    const path = Number.isInteger(n) && n > 0 ? head.slice(2, 2 + n) : head.replace(/^a\//, "").split(" b/")[0];
+    const quoted = /^"(?:\\.|[^"\\])*"/.exec(head)?.[0];
+    const path = quoted ? unquoteGitPath(quoted).slice(2) : Number.isInteger(n) && n > 0 ? head.slice(2, 2 + n) : head.replace(/^a\//, "").split(" b/")[0];
     const first = lines.findIndex((l) => l.startsWith("@@"));
     const body = first < 0 ? [] : lines.slice(first);
     const binary = first < 0 && lines.some((l) => l.startsWith("Binary files") || l.startsWith("GIT binary patch"));
-    files.push({ path, lines: body, binary, add: body.filter((l) => l[0] === "+").length, del: body.filter((l) => l[0] === "-").length });
+    const deleted = lines.includes("+++ /dev/null") || lines.some(line => line.startsWith("deleted file mode "));
+    files.push({ path, lines: body, binary, deleted, add: body.filter((l) => l[0] === "+").length, del: body.filter((l) => l[0] === "-").length });
   }
   return files;
 }

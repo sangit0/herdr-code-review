@@ -1,4 +1,5 @@
 {
   "place": "none",
+  "focusable": true,
   "title": "Herdr Code Review"
 }

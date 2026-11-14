@@ -12,6 +12,11 @@ assert.equal(pairs.length, 4); assert.equal(pairs[2].l.text, "b"); assert.equal(
 const patch = "diff --git a/src/a.js b/src/a.js\nindex 1..2 100644\n--- a/src/a.js\n+++ b/src/a.js\n@@ -1 +1,2 @@\n-x\n+y\n+z\ndiff --git a/img.png b/img.png\nBinary files a/img.png and b/img.png differ\n";
 const files = G.splitPatch(patch);
 assert.deepEqual(files.map((f) => [f.path, f.add, f.del, f.binary]), [["src/a.js", 2, 1, false], ["img.png", 0, 0, true]]);
+const quotedName = String.raw`quo\"te\\and\303\274\tline\n.txt`;
+const [quoted] = G.splitPatch(`diff --git "a/${quotedName}" "b/${quotedName}"\n--- "a/${quotedName}"\n+++ /dev/null\n@@ -1 +0,0 @@\n-removed\n`);
+assert.equal(quoted.path, 'quo"te\\andü\tline\n.txt');
+assert.equal(quoted.deleted, true);
+assert.equal(quoted.del, 1);
 assert.deepEqual(G.editorArgv("/opt/homebrew/bin/nvim", "/r/f.ts", 12), ["/opt/homebrew/bin/nvim", "+12", "/r/f.ts"]);
 assert.deepEqual(G.editorArgv("code", "/r/f.ts", 12), ["code", "/r/f.ts"]);
 console.log("git.js ok");

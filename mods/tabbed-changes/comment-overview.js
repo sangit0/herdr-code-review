@@ -3,8 +3,9 @@ import { h_flex, v_flex } from "gpui-base";
 import { closeOverlay, props, spaces, theme } from "herdr";
 import {
   commentAgentPicker, commentBadge, commentButton, commentsFor, idleCommentAgents, busyCommentAgents,
-  removeSavedComment, savedCommentCard, sendSavedComment,
+  removeSavedComment, savedCommentCard, sendSavedComment, sendSavedComments, defaultTarget,
 } from "./comments.js";
+import { agents } from "herdr";
 import { lineLabel } from "./comment-model.js";
 import { icon } from "./ui.js";
 
@@ -34,6 +35,28 @@ export class CommentOverview {
       try {
         await sendSavedComment(note, this.target, this.space);
         this.message = { text: "Comment and code sent to the agent." };
+      } catch (error) {
+        this.message = { text: String(error.message ?? error), error: true };
+      } finally {
+        this.sending = null;
+        cx.notify();
+      }
+    });
+  }
+
+  // Everything not yet sent, as one message to the chosen agent.
+  sendAll(cx) {
+    if (this.sending) return;
+    const unsent = this.notes().filter(note => !note.sentAt);
+    if (!unsent.length) return;
+    const target = this.target, agent = agents().find(a => a.address === target);
+    this.sending = "all";
+    this.message = null;
+    cx.notify();
+    cx.spawn(async cx => {
+      try {
+        await sendSavedComments(unsent, target, this.space);
+        this.message = { text: `Sent ${unsent.length} comment${unsent.length === 1 ? "" : "s"} to ${agent?.program?.name ?? agent?.app ?? "the agent"} (${target}).` };
       } catch (error) {
         this.message = { text: String(error.message ?? error), error: true };
       } finally {
@@ -74,14 +97,20 @@ export class CommentOverview {
   }
 
   render() {
-    const t = theme(), notes = this.notes(), idle = idleCommentAgents(this.space);
+    const t = theme(), idle = idleCommentAgents(this.space);
+    // By file, then line: easier to scan, and the order they are sent in.
+    const notes = this.notes().slice().sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line);
+    this.target = defaultTarget(this.target, idle);
     const canSend = !this.sending && idle.some(agent => agent.address === this.target);
+    const unsent = notes.filter(note => !note.sentAt).length;
     return v_flex().size_full().min_h(0).p(14).gap(10).bg(t.popover).text_color(t.foreground).text_size(13)
       .child(h_flex().h(38).flex_none().gap(9).items_center()
         .child(commentBadge(t))
         .child(v_flex().flex_1().min_w(0)
           .child(div().truncate().text_size(14).font_semibold().child(`Review comments (${notes.length})`))
           .child(div().truncate().text_size(11).text_color(t.muted).child(this.source?.root ?? "")))
+        .when(unsent > 0, e => e.child(commentButton("overview-send-all", this.sending === "all" ? "Sending…" : `Send all (${unsent})`, t,
+          cx => this.sendAll(cx), { primary: true, enabled: canSend })))
         .child(commentButton("overview-close", "Close", t, () => closeOverlay(this.overlay), { enabled: !this.sending })))
       .when(notes.length > 0, e => e.child(this.agentPicker(t, idle)))
       .child(v_flex().id("review-comments-list").flex_1().min_h(0).gap(8).overflow_y_scrollbar()

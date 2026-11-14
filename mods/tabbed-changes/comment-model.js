@@ -69,6 +69,16 @@ export async function sendAndRemove({note,read,write,...delivery}) {
   await deliverComments({...delivery,notes:[note]});
   write(read().filter(n=>n.id!==note.id));
 }
+// Deliver several comments as ONE message, then drop them (they stay if delivery fails).
+export async function sendAllAndRemove({ notes, read, write, ...delivery }) {
+  await deliverComments({ notes, ...delivery });
+  const sent = new Set(notes.map(n => n.id));
+  write(read().filter(n => !sent.has(n.id)));
+}
+// The agent to preselect: the current choice while it can still take comments, else the only one available.
+// With several to choose from it stays unset: a wrong silent default would send code to the wrong agent.
+export const defaultTarget = (current, agents) =>
+  agents.some(a => a.address === current) ? current : agents.length === 1 ? agents[0].address : null;
 export const lineLabel = context => context?.endLine>context?.line ? `${context.line}-${context.endLine}` : String(context?.line??'');
 export function selectionCovers(selection, line) {
   return Boolean(selection && line && selection.path === line.path && selection.side === line.side &&

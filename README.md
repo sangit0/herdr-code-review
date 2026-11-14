@@ -8,6 +8,30 @@ A VS Code-style Source Control mod with branch switching, explicit upstream push
 
 ![All changes in Herdr Code Review with the changed-file navigator, Source Control, and a saved inline comment](preview.png)
 
+## Screenshots
+
+**Diffs open in a split pane** next to your terminal, so you can keep talking to your agent while you review:
+
+![Split pane: the terminal on the left, All changes in its own pane, and Source Control on the right](docs/screenshots/split-pane.png)
+
+**Inline review thread** with a saved comment, and the selection bar below the diff (it stays one fixed height, so selecting never shifts the code):
+
+![Inline review thread with a saved comment and the selection bar below the diff](docs/screenshots/diff.png)
+
+**Side by side**, with the change markers in the gutter:
+
+![Side-by-side diff with the comment marker on the changed line](docs/screenshots/side-by-side.png)
+
+**Comments overview**: every saved comment for the repository, ready to send to an idle agent (one by one, or **Send all**):
+
+![Comments overview with two saved review comments and the idle agents to send them to](docs/screenshots/comments.png)
+
+**File preview** with Git gutter markers and changed lines:
+
+![File preview with Git gutter markers and changed lines](docs/screenshots/file-gutter.png)
+
+[All changes screenshot](docs/screenshots/all-changes.png)
+
 ## Review with your agent
 
 1. Open a changed file or a file tab.
@@ -18,7 +42,7 @@ A VS Code-style Source Control mod with branch switching, explicit upstream push
 
 Press **Esc** to close an inline thread. Reopen it to continue your draft.
 
-Open **Comments** at the bottom of Source Control to see every saved comment for the current repository. Each entry shows its file, line range, and code version, with actions to send it to an idle agent or remove it.
+Open **Comments** (the speech-bubble icon in the Source Control header, with a count badge) to see every saved comment for the current repository. Each entry shows its file, line range, and code version, with actions to send it to an idle agent or remove it.
 
 The message includes the repository, file path, line range, old/new side, code snapshot, and your feedback. Sending submits it immediately. A successful send removes the comment; a failed send keeps it for retry. The mod never interrupts agents or forces past their prompts.
 
@@ -88,27 +112,27 @@ Drag across diff rows to select a range. Dragging toward the top or bottom edge 
 
 ### Sending comments
 
-Open **Comments** at the bottom of Source Control. **Send all (N)** delivers every saved comment as one message, ordered by file and line, to the chosen agent; a single available agent is chosen for you, with several you pick one. Delivery waits for the agent to be idle or finished, and the comments are removed only after it succeeds.
+Open **Comments** from the Source Control header. **Send all (N)** delivers every saved comment as one message, ordered by file and line, to the chosen agent; a single available agent is chosen for you, with several you pick one. Delivery waits for the agent to be idle or finished, and the comments are removed only after it succeeds.
 
 ## Branch switching and Git actions
 
-Click the **branch name and chevron** in Source Control to open a searchable branch picker. Beside it, a single comparison control shows the detected `origin/main` or `origin/master`. Local branches switch in place; remote branches create a local tracking branch when one does not exist. The picker identifies the current branch and branches checked out in other worktrees. If a local branch with the same name tracks a different remote branch, select that local branch explicitly rather than silently changing its upstream.
+Click the **branch name and chevron** in Source Control to open a searchable branch picker. A comparison icon in the Source Control header (its tooltip names the detected `origin/main` or `origin/master`) opens the comparison. Local branches switch in place; remote branches create a local tracking branch when one does not exist. The picker identifies the current branch and branches checked out in other worktrees. If a local branch with the same name tracks a different remote branch, select that local branch explicitly rather than silently changing its upstream.
 
 Switching uses normal `git switch`: compatible uncommitted changes can carry over, and Git refuses a switch that would overwrite them. The mod does not force checkout, discard changes, or auto-stash.
 
-The sync row below **Comments** at the bottom of Source Control says in words what will happen, then offers the matching action:
+Below the file list, the branch row has one **split button** for the next likely action, with a chevron that opens the full Fetch / Pull / Push menu:
 
-- **Status line:** `↑2 commits to push to origin/main`, `↓1 commit to pull from origin/main`, `Up to date with origin/main`, `Diverged: ↑1 ahead, ↓1 behind origin/main`, or `feature-x is not on origin yet`.
-- **Primary button** follows the state: **Push ↑N**, **Pull ↓N**, **Publish branch**, or a disabled **Up to date** / **Diverged**. Hover it for exactly what it will do.
+- **Status line:** only appears when something needs attention: `Diverged: ↑1 ahead, ↓1 behind origin/main`, `Make a commit to enable push`, or a push waiting for confirmation. The counts live on the button itself.
+- **Split button** follows the state: **Fetch** when in sync, **Pull ↓N** when behind, **Push ↑N** when ahead, **Publish** when the branch is not on origin yet, or a disabled **Diverged**. Hover it for exactly what it will do; the chevron menu always offers Fetch, Pull and Push, with the ones that do not apply greyed out.
 - **Fetch** updates remote refs without merging. **Pull** is fast-forward only, without automatic stashing, and is off while the branch has diverged.
-- **Protected branches:** pushing to `main`, `master` or the default branch needs a second click (`Push ↑2 straight to main? Click again to confirm`, with **Cancel**); other branches push at once.
-- **Result:** a green line (`✓ Pushed 2 commits to origin/main`) shows for a few seconds; failures stay in red under the list.
+- **Protected branches:** pushing to `main`, `master` or the default branch needs a second click (the bar turns into **Cancel** and `Push ↑2 to main`); other branches push at once.
+- **Result:** a green line (`✓ Pushed 2 commits to origin/main`) shows for a few seconds; failures stay in red.
 
-Ahead/behind counts appear beside the branch name. Push and Pull recheck the current branch and upstream before acting; if either changed, refresh first. Push uses an explicit branch refspec and does not push unrelated branches or tags. Origin comparisons do not change the push destination. There is no force-push action.
+Ahead/behind counts show on the split button. Push and Pull recheck the current branch and upstream before acting; if either changed, refresh first. Push uses an explicit branch refspec and does not push unrelated branches or tags. Origin comparisons do not change the push destination. There is no force-push action.
 
 ## Compare with origin/main or origin/master
 
-Use the **default-branch comparison control beside checkout** at the top of Source Control to review your branch against the remote default branch. The mod uses `origin/HEAD` when it points to `main` or `master`, otherwise prefers `origin/main` and falls back to `origin/master`.
+Use the **comparison icon** in the Source Control header to review your branch against the remote default branch. The mod uses `origin/HEAD` when it points to `main` or `master`, otherwise prefers `origin/main` and falls back to `origin/master`.
 
 The diff compares the working tree with the last commit shared by your branch and the fetched default branch (their Git merge base). This includes committed changes, staged and unstaged edits, deletions, and untracked-file previews. Commits that land only on the default branch stay out of your review. Use **Local changes** to return to local review, or double-click an All changes file header to open that file's diff.
 
@@ -130,18 +154,6 @@ The diff compares the working tree with the last commit shared by your branch an
 | File views | Whole-file previews with added, modified, and deleted-line gutter markers. |
 | Neovim integration | Reuses the selected Herdr tab's persistent embedded editor with your configuration, LSP, plugins and keymaps. **⌘-click** also opens lines with a working-file counterpart. |
 | File-type icons | Material Icon Theme icons in the panel and tab headers. |
-
-### Review views
-
-![Inline review thread with a saved comment and the selection bar below the diff](docs/screenshots/diff.png)
-
-![Comments overview showing a saved review comment and agent actions](docs/screenshots/comments.png)
-
-![Side-by-side diff with wrapped code on both sides](docs/screenshots/side-by-side.png)
-
-![File preview with Git gutter markers and changed lines](docs/screenshots/file-gutter.png)
-
-[All changes screenshot](docs/screenshots/all-changes.png) · [Neovim example](docs/screenshots/neovim.png)
 
 ## Install
 

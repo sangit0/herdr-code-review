@@ -1,16 +1,18 @@
 // Bounded, generation-safe read reuse. No host APIs and no cached writes.
 export class ReadCache {
-  constructor({ttl=400,maxEntries=32,maxValue=262144,clock=()=>Date.now()}={}) {
-    Object.assign(this,{ttl,maxEntries,maxValue,clock});this.entries=new Map();
+  // `deadline`: a read still pending after this long is treated as lost. The next caller starts a fresh read instead of
+  // waiting on it forever; if the lost one ever settles, its result is ignored (it is no longer the entry for its key).
+  constructor({ttl=400,maxEntries=32,maxValue=262144,deadline=35000,clock=()=>Date.now()}={}) {
+    Object.assign(this,{ttl,maxEntries,maxValue,deadline,clock});this.entries=new Map();
   }
   get size(){return this.entries.size;}
   invalidate(){this.entries.clear();}
   read(key,loader) {
     const cached=this.entries.get(key);
-    if(cached && (cached.pending || cached.expires>this.clock())) {
+    if(cached && (cached.pending ? this.clock()-cached.started<this.deadline : cached.expires>this.clock())) {
       this.entries.delete(key);this.entries.set(key,cached);return cached.promise;
     }
-    const entry={pending:true};this.entries.set(key,entry);
+    const entry={pending:true,started:this.clock()};this.entries.set(key,entry);
     while(this.entries.size>this.maxEntries)this.entries.delete(this.entries.keys().next().value);
     entry.promise=Promise.resolve().then(loader).then(value=>{
       if(this.entries.get(key)===entry){

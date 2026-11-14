@@ -104,6 +104,7 @@ export class DiffTab {
     const view = this.base;
     if (!view?.source?.root) return;
     if (this.isHistorical && this.shownSig === this.sig() && !this.error && !this.loading) return;
+    if (this.inflight && Date.now() - this.inflightSince > 45000) { this.loadToken++; this.inflight = false; this.loading = false; invalidateReads(); } // a read that never settled
     if (this.inflight) { this.again = true; return; }
     if(!this.pinned && this.requestAt!==this.at){
       this.requestAt=this.at;this.modeOverride=null;this.fileOverride=null;this.comparisonOverride=null;this.collapsed.clear();
@@ -116,7 +117,8 @@ export class DiffTab {
       this.pendingCommentOpen=scope===this.shownScope && Boolean(this.selectedRow || this.pendingCommentOpen);
       if (scope !== this.shownScope) this.selectionMode = null;
       this.dataStamp=null;this.display = []; this.baseSizes=[];this.changeIndices=[];this.matches=[];this.matchSet=new Set();this.treeNodes=[];this.sizes = []; this.files = []; this.selectedRow = null; this.selection=null; this.anchor=null; this.comparisonResolved=null; this.loading = true; }
-    this.inflight = true;
+    this.inflight = true; this.inflightSince = Date.now();
+    const token = this.loadToken = (this.loadToken ?? 0) + 1;
     const { root, on } = view.source, mode = this.mode, file = this.file, comparison=this.comparison,options=this.diffOptions(),commit=view.commit;
     if (commit) this.watched = null; else this.watch(root, cx);
     cx.spawn(async (cx) => {
@@ -140,6 +142,7 @@ export class DiffTab {
         }
       } catch (e) { if (this.sig() === sig){const message=String(e?.message??e);changed=changed||this.error!==message;this.error=message;} }
       finally {
+        if (token !== this.loadToken) return; // an abandoned run must not end the one that replaced it
         this.inflight = false; this.loading = false;
         if (this.again) { this.again = false; this.load(cx, true); }
         if(changed)cx.notify();

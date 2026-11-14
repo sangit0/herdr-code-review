@@ -65,6 +65,8 @@ async function readReviewLocation(request) {
   return { cwd: source.root, on: source.on ?? null };
 }
 
+const STUCK_MS = 45000; // a refresh still loading after this long is treated as lost
+
 export class Panel {
   init(cx) {
     this.staged = []; this.changes = []; this.conflicts = []; this.branch = null; this.originBase=null;
@@ -110,11 +112,14 @@ export class Panel {
   }
 
   refresh(cx) {
+    // A git read that never settles would leave `loading` set for good. After STUCK_MS give that run up and start over.
+    if (this.loading && Date.now() - this.loadingSince > STUCK_MS) { this.loadToken++; this.loading = false; invalidateReads(); }
     if (this.loading || this.busy) { this.dirty = true; return; }
     const context = this.key(), request = this.loc;
     if (context !== this.context) { this.context = context; this.reset(); }
     if (!request.cwd && !request.reviewPane) return;
-    this.loading = true; this.dirty = false;
+    this.loading = true; this.dirty = false; this.loadingSince = Date.now();
+    const token = this.loadToken = (this.loadToken ?? 0) + 1;
     cx.spawn(async (cx) => {
       try {
         const resolved = request.reviewPane ? this.reviewLocation ?? await readReviewLocation(request) : request;
@@ -141,7 +146,7 @@ export class Panel {
         }
         let originBase=null;
         try {originBase=await resolveOrigin(async args=>{const r=await git(args);if(r.code!==0)throw new Error(r.stderr);return r.stdout;},"origin");}catch { /* No conventional origin base has been fetched yet. */ }
-        if (this.key() !== context) return;
+        if (this.key() !== context || token !== this.loadToken) return;
         this.originBase=originBase;
         this.root = root; this.on = on; this.hasHead = head.code === 0;
         Object.assign(this, { branch: parsed.branch, staged: parsed.staged, changes: parsed.changes, conflicts: parsed.conflicts, limited: parsed.limited, error: null });
@@ -150,6 +155,7 @@ export class Panel {
         this.followPick();
       } catch (e) { if (this.key() === context) this.error = String(e); }
       finally {
+        if (token !== this.loadToken) return; // an abandoned run must not end the one that replaced it
         this.loading = false;
         if (this.dirty) this.refresh(cx);
         cx.notify();
@@ -421,7 +427,7 @@ export class Panel {
         .child(this.commentsButton(t))
         .child(iconButton("review-history", "history", t, () => showHistory(this.source()), { title: "Commit history (l)" }))
         .child(iconButton("all-changes","file-diff",t,cx=>this.openAll(cx),{title:"Open all changes"}))
-        .child(iconButton("refresh","refresh",t,cx=>this.refresh(cx),{title:"Refresh Source Control"})));
+        .child(iconButton("refresh","refresh",t,cx=>{invalidateReads();this.refresh(cx);},{title:"Refresh Source Control"})));
   }
   // The review comments live in a small header icon beside History; the count rides on it as a badge.
   commentsButton(t) {

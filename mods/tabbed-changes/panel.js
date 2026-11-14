@@ -417,25 +417,34 @@ export class Panel {
     return h_flex().h(36).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border)
       .child(div().flex_1().text_size(11).font_semibold().text_color(t.muted).child("SOURCE CONTROL"))
       .when(Boolean(this.root), e => e
+        .when(Boolean(this.originBase), el => el.child(iconButton("compare-default-branch", "columns", t, cx => this.compareOrigin(cx), { title: `Review changes against ${this.originBase.name}` })))
+        .child(this.commentsButton(t))
         .child(iconButton("review-history", "history", t, () => showHistory(this.source()), { title: "Commit history (l)" }))
         .child(iconButton("all-changes","file-diff",t,cx=>this.openAll(cx),{title:"Open all changes"}))
         .child(iconButton("refresh","refresh",t,cx=>this.refresh(cx),{title:"Refresh Source Control"})));
   }
+  // The review comments live in a small header icon beside History; the count rides on it as a badge.
+  commentsButton(t) {
+    const space = spaces().find((s) => s.active)?.id, count = commentsFor(this.source()).length;
+    const open = () => openOverlay({ mod: "tabbed-changes", kind: "dialog", width: 580, height: 450, props: { role: "comments", source: this.source(), space } });
+    return div().relative().flex_none()
+      .child(iconButton("open-review-comments", "comment", t, open, { title: count ? `Review comments (${count})` : "Review comments", color: count ? t.accent : undefined, size: 22 }))
+      .when(count > 0, e => e.child(div().absolute().top(-2).right(-3).min_w(13).h(13).px(3).rounded(7).bg(t.accent).text_color(t.accent_foreground)
+        .flex().items_center().justify_center().text_size(9).font_semibold().child(count > 9 ? "9+" : String(count))));
+  }
   branchBar(t) {
-    const b=this.branch;
-    return h_flex().flex_none().px(10).py(6).gap(5).items_center().border_b(1).border_color(t.border)
-        .child(h_flex().id("checkout-branch").flex_1().min_w(0).gap(5).items_center().cursor_pointer().rounded(3).hover(s=>s.bg(t.hover))
-          .tooltip("Checkout branch…").on_click(()=>this.chooseBranch())
-          .child(icon("branch",14).text_color(t.accent))
-          .child(div().flex_1().min_w(0).truncate().child(b?.name??"Select repository"))
-          .child(icon("chevron-down",12).text_color(t.dim)))
-        .when(Boolean(this.root&&this.originBase),el=>el.child(toolButton("compare-default-branch","columns",this.originBase.name,t,cx=>this.compareOrigin(cx))
-          .tooltip(`Review changes against ${this.originBase.name}`)))
-        .when(Boolean(b?.upstream),el=>el.child(div().flex_none().text_size(11).text_color(t.muted).child(`↓${b.behind} ↑${b.ahead}`)));
+    const b=this.branch, sync=this.remoteActions(t);
+    const branch = h_flex().id("checkout-branch").flex_1().min_w(0).h(26).px(6).gap(6).items_center().cursor_pointer().rounded(6).hover(s=>s.bg(t.hover))
+      .tooltip("Checkout branch…").on_click(()=>this.chooseBranch())
+      .child(icon("branch",14).text_color(t.accent))
+      .child(div().flex_1().min_w(0).truncate().font_semibold().child(b?.name??"Select repository"));
+    // While confirming a push to main, the confirm bar takes the whole row.
+    const row = sync.arming ? sync.control : h_flex().gap(6).items_center().child(branch).child(sync.control);
+    return v_flex().flex_none().px(8).pt(8).pb(6).gap(6).border_t(1).border_color(t.border).child(row).when(sync.show, e => e.child(sync.notes));
   }
 
-  // Fetch / Pull / Push (or Publish) with what each will do, in words and counts: a status line, then buttons that
-  // follow the branch's state. Pushing to main/master needs a second click, and the result is said afterwards.
+  // Fetch / Pull / Push (or Publish) as one segmented control under the branch, plus a one-line status that only
+  // speaks when there is something to say. Pushing to main/master needs a second click, and the result is said afterwards.
   remoteActions(t) {
     const b = this.branch, usable = Boolean(b && !b.detached && this.hasHead), free = usable && !this.busy && !this.loading;
     const up = b?.upstream, ahead = b?.ahead ?? 0, behind = b?.behind ?? 0, plural = (n) => (n === 1 ? "" : "s");
@@ -449,71 +458,80 @@ export class Panel {
       pull: `↓${behind} commit${plural(behind)} to pull from ${up}`,
       synced: `Up to date with ${up}`,
     }[state];
-    const tone = arming || state === "diverged" ? t.ansi3 : state === "synced" || state === "none" ? t.dim : t.muted;
-    const button = (id, label, iconName, { onClick, enabled, primary = false, warn = false, tip }) => {
-      const on = enabled && primary;
-      return h_flex().id(id).h(26).px(9).gap(6).items_center().justify_center().rounded(6).flex_none().border_1()
-        .border_color(on ? (warn ? t.ansi3 : t.accent) : t.border).bg(on ? (warn ? t.ansi3 : t.accent) : t.raised)
-        .text_color(on ? t.accent_foreground : enabled ? t.foreground : t.dim).text_size(11).font_semibold()
-        .when(enabled, e => e.cursor_pointer().hover(s => s.opacity(0.88)).on_click((_e, cx) => onClick(cx)))
+    const loud = arming || state === "diverged";
+    const tone = loud ? t.ansi3 : t.dim;
+    // One segment: icon + short label, filled when it is the action to take now.
+    const segment = (id, label, iconName, { onClick, enabled, primary = false, warn = false, tip, first = false }) => {
+      const on = enabled && primary, fill = warn ? t.ansi3 : t.accent;
+      return h_flex().id(id).flex_1().min_w(0).h(28).px(6).gap(5).items_center().justify_center()
+        .when(!first, e => e.border_l(1).border_color(t.border))
+        .bg(on ? fill : t.raised).text_color(on ? t.accent_foreground : enabled ? t.foreground : t.dim).text_size(11).font_semibold()
+        .when(enabled, e => e.cursor_pointer().hover(s => s.opacity(0.85)).on_click((_e, cx) => onClick(cx)))
         .when(Boolean(tip), e => e.tooltip(tip)).child(icon(iconName, 13)).child(div().truncate().child(label));
     };
     const busy = this.busy ? `${this.busy}…` : null;
-    let row;
+    const group = (...segments) => h_flex().w_full().rounded(7).border_1().border_color(t.border).overflow_hidden().children(segments);
+    const pullable = free && Boolean(up) && behind > 0 && ahead === 0;
+    let row, menu = null;
     if (arming) {
-      row = h_flex().gap(6).items_center()
-        .child(button("push-cancel", "Cancel", "minus", { enabled: true, onClick: (cx) => { this.pushConfirm = false; cx.notify(); } }))
-        .child(div().flex_1().min_w(0).flex().child(button("push-confirm", state === "push" ? `Push ↑${ahead} to ${b.name}` : `Publish ${b.name}`, "arrow-up", { enabled: free, primary: true, warn: true, onClick: (cx) => this.requestPush(cx) })));
+      row = group(
+        segment("push-cancel", "Cancel", "minus", { enabled: true, first: true, onClick: (cx) => { this.pushConfirm = false; cx.notify(); } }),
+        segment("push-confirm", state === "push" ? `Push ↑${ahead} to ${b.name}` : `Publish ${b.name}`, "arrow-up", { enabled: free, primary: true, warn: true, onClick: (cx) => this.requestPush(cx) }));
     } else {
-      const pullable = free && Boolean(up) && behind > 0 && ahead === 0;
-      const main = state === "publish" ? { label: "Publish branch", icon: "cloud-upload", enabled: free, primary: true, tip: `Publish ${b?.name} to origin and track it` }
-        : state === "push" ? { label: `Push ↑${ahead}`, icon: "arrow-up", enabled: free, primary: true, tip: `Push ${b?.name} to ${up}` }
-        : state === "pull" ? { label: `Pull ↓${behind}`, icon: "arrow-down", enabled: pullable, primary: true, tip: `Fast-forward ${b?.name} from ${up}` }
-        : state === "synced" ? { label: "Up to date", icon: "check", enabled: false, tip: `${b?.name} matches ${up}` }
-        : state === "diverged" ? { label: "Diverged", icon: "arrow-up", enabled: false, tip: "Both sides have new commits: rebase or merge in a terminal" }
-        : { label: "Push", icon: "arrow-up", enabled: false, tip: status };
-      row = h_flex().gap(6).items_center()
-        .child(button("fetch", "Fetch", "cloud", { enabled: free, onClick: (cx) => this.fetch(cx), tip: "Fetch origin (updates remote branches, changes nothing local)" }))
-        .when(state !== "pull", e => e.child(button("pull", behind ? `Pull ↓${behind}` : "Pull", "arrow-down", { enabled: pullable, onClick: (cx) => this.pull(cx),
-          tip: !up ? "Pull needs an upstream branch" : ahead && behind ? "Diverged: pull would not fast-forward" : behind ? `Fast-forward from ${up}` : "Nothing to pull" })))
-        .child(div().flex_1().min_w(0).flex().justify_end().child(button("push-branch", busy ?? main.label, main.icon, {
-          enabled: main.enabled && !busy, primary: main.primary, tip: main.tip,
-          onClick: (cx) => (state === "pull" ? this.pull(cx) : this.requestPush(cx)) })));
+      const pushable = free && (state === "push" || state === "publish");
+      // Like Zed: one button for what you most likely want next, and a chevron for the rest.
+      const next = state === "publish" ? { label: "Publish", icon: "cloud-upload", enabled: free, primary: true, go: (cx) => this.requestPush(cx), tip: `Publish ${b?.name} to origin and track it` }
+        : state === "push" ? { label: `Push ↑${ahead}`, icon: "arrow-up", enabled: free, primary: true, go: (cx) => this.requestPush(cx), tip: `Push ${b?.name} to ${up}` }
+        : state === "pull" ? { label: `Pull ↓${behind}`, icon: "arrow-down", enabled: pullable, primary: true, go: (cx) => this.pull(cx), tip: `Fast-forward ${b?.name} from ${up}` }
+        : state === "diverged" ? { label: "Diverged", icon: "arrow-up", enabled: false, go: () => {}, tip: "Both sides have new commits: rebase or merge in a terminal" }
+        : { label: "Fetch", icon: "refresh", enabled: free, go: (cx) => this.fetch(cx), tip: "Fetch origin (updates remote branches, changes nothing local)" };
+      const mainOn = next.enabled && next.primary && !busy;
+      const chevronOn = Boolean(usable);
+      row = h_flex().rounded(7).border_1().border_color(t.border).overflow_hidden()
+        .child(h_flex().id("sync-main").flex_none().h(26).px(8).gap(6).items_center().justify_center()
+          .bg(mainOn ? t.accent : t.raised).text_color(mainOn ? t.accent_foreground : next.enabled ? t.foreground : t.dim).text_size(11).font_semibold()
+          .when(next.enabled && !busy, e => e.cursor_pointer().hover(s => s.opacity(0.85)).on_click((_e, cx) => { this.syncMenu = false; next.go(cx); }))
+          .tooltip(next.tip).child(icon(busy ? "refresh" : next.icon, 13)).child(div().truncate().child(busy ?? next.label)))
+        .child(div().id("sync-menu-toggle").w(26).h(26).flex_none().flex().items_center().justify_center().border_l(1).border_color(mainOn ? t.accent : t.border)
+          .bg(mainOn ? t.accent : t.raised).text_color(mainOn ? t.accent_foreground : t.muted)
+          .when(chevronOn, e => e.cursor_pointer().hover(s => s.opacity(0.85)).on_click((_e, cx) => { this.syncMenu = !this.syncMenu; cx.notify(); }))
+          .tooltip("Fetch, Pull, Push…").child(icon(this.syncMenu ? "chevron-down" : "chevron-down", 13)));
+      if (this.syncMenu && chevronOn) {
+        const item = (id, label, iconName, detail, enabled, go) => h_flex().id(id).w_full().h(30).px(10).gap(8).items_center().rounded(5)
+          .text_size(12).text_color(enabled ? t.foreground : t.dim)
+          .when(enabled, e => e.cursor_pointer().hover(s => s.bg(t.hover)).on_click((_e, cx) => { this.syncMenu = false; go(cx); }))
+          .child(icon(iconName, 14)).child(div().flex_1().min_w(0).truncate().child(label))
+          .child(div().flex_none().text_size(11).text_color(t.dim).child(detail));
+        menu = v_flex().id("sync-menu").absolute().bottom(30).right(0).w(190).p(4).gap(1).rounded(8).border_1().border_color(t.border).bg(t.raised)
+          .on_hover((on, cx) => { if (!on && this.syncMenu) { this.syncMenu = false; cx.notify(); } })
+          .child(item("menu-fetch", "Fetch", "refresh", "origin", free, (cx) => this.fetch(cx)))
+          .child(item("menu-pull", "Pull", "arrow-down", behind ? `↓${behind}` : "", pullable, (cx) => this.pull(cx)))
+          .child(item("menu-push", state === "publish" ? "Publish branch" : "Push", "arrow-up", ahead ? `↑${ahead}` : "", pushable, (cx) => this.requestPush(cx)));
+      }
     }
-    return v_flex().flex_none().px(10).py(8).gap(6).border_t(1).border_color(t.border)
-      .child(div().id("sync-status").text_size(11).text_color(tone).truncate().tooltip(status).child(status))
-      .child(row)
+    const say = loud || state === "none";
+    const notes = v_flex().flex_none().gap(4)
+      .when(say, e => e.child(h_flex().id("sync-status").gap(5).items_center().text_size(11).text_color(tone).tooltip(status)
+        .child(div().flex_1().min_w(0).truncate().child(status))))
       .when(Boolean(this.result), e => e.child(h_flex().gap(5).items_center().text_size(11).text_color(t.ansi2)
         .child(icon("check", 12)).child(div().flex_1().min_w(0).truncate().child(this.result))));
+    return { control: div().relative().flex_none().when(arming, e => e.w_full()).child(row).when(Boolean(menu), e => e.child(menu)), notes, arming, show: say || Boolean(this.result) };
   }
 
   commitBox(t) {
     const count = this.staged.length;
     const enabled = Boolean(this.message.trim() && count > 0 && this.root && !this.busy && !this.loading);
-    const label = this.busy === "Commit" ? "Committing…" : count ? `Commit ${count} staged` : "Commit";
-    return v_flex().flex_none().p(10).gap(8).border_b(1).border_color(t.border)
-      .child(div().id("commit-message").w_full().px(10).py(6).rounded(8).border_1().border_color(this.typing ? t.accent : t.border).cursor_text()
+    const label = this.busy === "Commit" ? "Committing…" : count ? `Commit ${count}` : "Commit";
+    return v_flex().flex_none().px(8).pb(8).child(
+      v_flex().id("commit-message").w_full().rounded(8).border_1().border_color(this.typing ? t.accent : t.border).bg(t.background).overflow_hidden().cursor_text()
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-        .child(Textarea.new(this.input).w_full().text_size(12).text_color(t.foreground)))
-      .child(div().id("commit").w_full().h(30).flex().items_center().justify_center().rounded(8)
-        .bg(enabled ? t.solid : t.raised).text_color(enabled ? t.solid_foreground : t.dim).text_size(12).font_semibold()
-        .when(enabled, (e) => e.cursor_pointer()).on_click((_e, cx) => this.commit(cx)).child(icon("check",13)).child(div().ml(5).child(label)))
-      .when(Boolean(this.message.trim()) && !count && Boolean(this.root) && !this.loading, (e) => e.child(div().text_size(11).text_color(t.dim).child("Stage changes with + to commit them")));
-  }
-
-  commentsBar(t, space) {
-    const count = commentsFor(this.source()).length;
-    return div().flex_none().px(8).py(6).border_t(1).border_color(t.border)
-      .child(h_flex().id("open-review-comments").w_full().h(30).px(8).gap(7).items_center().rounded(5)
-        .cursor_pointer().bg(t.raised).hover(style => style.bg(t.hover))
-        .on_click(() => openOverlay({
-          mod: "tabbed-changes", kind: "dialog", width: 580, height: 450,
-          props: { role: "comments", source: this.source(), space },
-        }))
-        .child(icon("comment", 14).text_color(count ? t.accent : t.muted))
-        .child(div().flex_1().font_semibold().text_size(12).child("Comments"))
-        .child(div().min_w(19).px(5).rounded(8).bg(count ? t.selected : t.background)
-          .text_center().text_size(11).text_color(count ? t.accent : t.muted).child(String(count))));
+        .child(div().w_full().px(10).pt(7).pb(2).child(Textarea.new(this.input).w_full().text_size(12).text_color(t.foreground)))
+        .child(h_flex().w_full().px(6).pb(6).gap(6).items_center()
+          .child(div().flex_1())
+          .child(h_flex().id("commit").h(26).px(10).gap(5).items_center().justify_center().rounded(6).flex_none()
+            .bg(enabled ? t.solid : t.raised).text_color(enabled ? t.solid_foreground : t.dim).text_size(11).font_semibold()
+            .when(enabled, (e) => e.cursor_pointer().hover(s => s.opacity(0.88))).on_click((_e, cx) => this.commit(cx))
+            .child(icon("check",13)).child(div().child(label)))));
   }
 
   render(cx) {
@@ -534,9 +552,8 @@ export class Panel {
       .on_mouse_down("left", () => this.handle.focus())
       .on_key_down((event, cx) => this.keyEvent(event, cx))
       .child(this.headerBar(t))
-      .when(Boolean(this.root), e => e.child(this.branchBar(t)).child(this.commitBox(t)))
       .child(list)
-      .when(Boolean(this.root), e => e.child(this.commentsBar(t, space?.id)).child(this.remoteActions(t)))
+      .when(Boolean(this.root), e => e.child(this.branchBar(t)).child(this.commitBox(t)))
       .when(Boolean(this.note), (e) => e.child(div().px(10).py(6).border_t(1).border_color(t.border).text_size(11).text_color(t.ansi1).child(this.note)))
       .child(shortcutFooter("panel", this.shortcutContext(), (action, cx) => this.performShortcut(action, cx), t, { active: this.keyboardFocused }));
   }

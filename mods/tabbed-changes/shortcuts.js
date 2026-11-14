@@ -59,5 +59,5 @@ export function shortcutFooter(surface, context, onAction, theme, { active = tru
   // Dimmed while this view does not hold the keyboard: the keys only work after you click it (or move into it).
   return h_flex().id("review-shortcuts").flex_none().w_full().px(10).py(6).gap(11).items_center()
     .flex_wrap().border_t(1).border_color(theme.border).opacity(active ? 1 : 0.62)
-    .children(footerActions(surface, context).map((item) => keycap(theme, item, onAction)));
+    .children(footerActions(surface, context).filter((item) => surface !== "panel" || (item.enabled && item.action)).map((item) => keycap(theme, item, onAction)));
 }

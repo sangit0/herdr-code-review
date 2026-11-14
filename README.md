@@ -167,6 +167,17 @@ If your layout uses a pane header, set its `header.content` to `{"mod":"tabbed-c
 
 The internal mod ID, folder, layout references, asset paths, and saved-state keys remain `tabbed-changes` for compatibility with existing installations.
 
+### Jump to Changes with a key (optional)
+
+Add a hidden controller block to your layout's `floating` list and bind a key to it. The key then shows the panel and selects its Changes tab from anywhere:
+
+```json
+// layouts/<name>.json, in "floating"
+{ "id": "tabbed-changes-keys", "content": { "mod": "tabbed-changes", "props": { "role": "keys" } }, "edge": "bottom", "align": "end" }
+// keys.json, in "global" and "terminal"
+"cmd-shift-g": "tabbed-changes.keys.show-changes"
+```
+
 ### Use another terminal editor
 
 The local default is `nvim`, using the existing `herdr-nvim` companion rather than creating a terminal tab for each file. Set Herdr's shared key `tabbed-changes.editor` to an executable such as `vim`, `hx`, or an absolute executable path to choose another editor. A custom editor, a remote source, or an absent companion uses the plain terminal-editor path. A failure from an installed companion is reported instead of silently opening another tab. This mod does not provide its own LSP client.

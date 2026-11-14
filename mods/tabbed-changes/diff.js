@@ -493,15 +493,16 @@ export class DiffTab {
       ? "Show spaces to comment on unchanged lines on the left"
       : "Hover for + · Drag or Shift-click to select lines · ⌘C to copy · ⌘⇧I to comment";
   }
+  // A fixed-height line above the shortcut footer: the hint when nothing is selected, the selection and Copy when
+  // something is. Always the same height, so selecting never moves the diff above it.
   commentBar(t, cx) {
-    const hint = this.commentHint();
     const selected = this.selection && (this.selectionMode || this.selectedRow);
-    if (!selected) return null;
-    return h_flex().h(22).px(12).gap(10).flex_none().items_center().text_size(11)
+    const copied = this.copiedFor === this.copyKey();
+    const hint = selected && !(this.ignoreWhitespace && this.layout === "split") ? "⌘C copy · ⌘⇧I comment" : this.commentHint();
+    return h_flex().id("selection-bar").h(26).px(12).gap(10).flex_none().items_center().text_size(11).border_t(1).border_color(t.border)
       .when(selected, e => e.child(div().flex_none().font_semibold().text_color(t.accent)
-        .child(`Selected: ${lineLabel(this.selection)} · ${this.selection.side === "old" ? "original" : "current"}`)))
-      .when(selected, e => e.child(toolButton("copy-selection", this.copiedFor === this.copyKey() ? "check" : "copy",
-        this.copiedFor === this.copyKey() ? "Copied" : "Copy", t, cx => this.copySelection(cx), { active: this.copiedFor === this.copyKey() })))
+        .child(`Selected: ${lineLabel(this.selection)} · ${this.selection.side === "old" ? "original" : "current"}`))
+        .child(toolButton("copy-selection", copied ? "check" : "copy", copied ? "Copied" : "Copy", t, cx => this.copySelection(cx), { active: copied, compact: true })))
       .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(hint));
   }
   // Where the inline comment card starts: under the "+" of the side being commented (right column in split view),
@@ -536,7 +537,7 @@ export class DiffTab {
     const context = contextForRow(r, this.base?.source);
     const selected = (this.selectionMode || this.selectedRow) && selectionCovers(this.selection, context);
     return h_flex().id(`diff-hover-${index}`).w_full().h(height).items_start().flex_none()
-      .text_color("#00000000").hover(style => style.text_color(t.accent))
+      .text_color(t.dim + "66").hover(style => style.text_color(t.accent))
       .when(add || del, (e) => e.bg(tone + "1c"))
       .child(div().w(40).flex_none().text_right().pr(6).text_color(del ? tone + "cc" : t.dim).when(del, (e) => e.bg(tone + "30")).child(r.old === undefined ? "" : String(r.old)))
       .child(div().w(40).flex_none().text_right().pr(6).text_color(add ? tone + "cc" : t.dim).when(add, (e) => e.bg(tone + "30")).child(r.next === undefined ? "" : String(r.next)))
@@ -560,7 +561,7 @@ export class DiffTab {
     const selected = wholeRowSelected || (cell && (this.selectionMode || this.selectedRow) &&
       selectionCovers(this.selection, { path, side, line: cell.n }));
     return h_flex().id(`diff-hover-${index}-${side}`).flex_1().min_w(0).h(height).items_start()
-      .text_color("#00000000").hover(style => style.text_color(t.accent))
+      .text_color(t.dim + "66").hover(style => style.text_color(t.accent))
       .when(Boolean(cell?.change), (e) => e.bg(color + "1c")).when(!cell, (e) => e.bg(t.raised + "88"))
       .child(div().w(40).flex_none().text_right().pr(8).text_color(cell?.change ? color + "cc" : t.dim).when(Boolean(cell?.change), (e) => e.bg(color + "30")).child(cell ? String(cell.n) : ""))
       .child(this.badge(cell?contextForRow({kind:"c",path,l:side==="old"?cell:null,r:side==="new"?cell:null,baseRevision:this.comparisonResolved?.sha,baseLabel:this.comparisonResolved?.name,oldContextUnavailable:Boolean(this.ignoreWhitespace)},this.base.source,side):null,t))
@@ -793,12 +794,13 @@ export class DiffTab {
       .when(maxHx > 0, e => e.child(this.hscrollThumbs(t, maxHx)))
       .child(Scrollbar.vertical("scm-diff-rows").viewport_from_layout().absolute().inset_0());
     return shell([
-      this.header(t, cx),this.isHistorical?null:this.comparisonBar(t),reviewToolbar(this,t),this.commentBar(t, cx),this.footer(t),
+      this.header(t, cx),this.isHistorical?null:this.comparisonBar(t),reviewToolbar(this,t),this.footer(t),
       this.searchOpen?searchBar(this,t):null,
       this.fetchError ? div().px(12).py(6).text_size(12).text_color(t.ansi1).child(this.fetchError) : null,
       this.error ? div().px(12).py(8).text_size(12).text_color(t.ansi1).child(this.error) : null,
       !this.display.length && !this.loading && !this.error ? div().p(16).text_color(t.dim).child(this.mode==="all"?"No changes for this comparison":"No changes in this file") : h_flex().id("review-content").w_full().flex_1().min_h(0).items_stretch().overflow_hidden().child(this.mode==="all"&&this.showFiles?h_resizable("review-file-split").size_full().child(resizable_panel().size(248).size_range(160,520).child(fileNavigator(this,t))).child(resizable_panel().child(body)):body),
       this.truncated ? div().px(12).py(4).border_t(1).border_color(t.border).text_size(11).text_color(t.dim).child(`Showing the first ${MAX_ROWS.toLocaleString()} lines`) : null,
+      this.isHistorical && !(this.selection && (this.selectionMode || this.selectedRow)) ? null : this.commentBar(t, cx),
       shortcutFooter("diff", this.shortcutContext(), (action, eventCx) => this.performShortcut(action, eventCx), t, { active: this.handle.is_focused() }),
     ].filter(Boolean));
   }

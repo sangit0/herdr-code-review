@@ -1,7 +1,8 @@
 // Herdr Code Review: a VS Code-style Source Control panel whose files open in tabs.
 // One mod: Source Control, file/diff review tabs, history and review dialogs.
 import { View } from "gpui-kit";
-import { props, nextCommand } from "herdr";
+import { props, nextCommand, run } from "herdr";
+import { div } from "gpui-kit";
 import { BranchPicker } from "./branch-picker.js";
 import { CommentOverview } from "./comment-overview.js";
 import { ReviewPaneHeader } from "./pane-header.js";
@@ -10,13 +11,25 @@ import { DiffTab } from "./diff.js";
 import { FileTab } from "./viewer.js";
 import { HistoryView } from "./history-view.js";
 
+// An empty, always-mounted block (layouts: a floating block with props {role: "keys"}) so a key bound to
+// `tabbed-changes.keys.show-changes` works wherever focus is: it shows the panel and selects its Changes tab.
+class KeyRelay {
+  init() {}
+  render() { return div().size(0); }
+  async command(command) {
+    if (command !== "keys.show-changes") return;
+    try { await run("layout.show", { id: "panel" }); } catch { /* already shown */ }
+    try { await run("layout.select", { stack: "panel-body", child: "changes" }); } catch { /* no such layout */ }
+  }
+}
+
 export default class ScmTabs extends View {
   init(_props, cx) {
     const role = props()?.role;
     this.role = role ?? "panel";
     this.part = role === "branches" ? new BranchPicker() : role === "comments" ? new CommentOverview() :
       role === "pane-header" ? new ReviewPaneHeader() : role === "history" ? new HistoryView() :
-      role === "diff" ? new DiffTab() : role === "file" ? new FileTab() : new Panel();
+      role === "diff" ? new DiffTab() : role === "file" ? new FileTab() : role === "keys" ? new KeyRelay() : new Panel();
     this.part.init(cx);
     cx.spawn(async cx => {
       for (;;) {
@@ -25,6 +38,8 @@ export default class ScmTabs extends View {
         if (command === "focus" || command === `${this.role}.focus`) {
           if (typeof this.part.focus === "function") this.part.focus();
           else this.part.handle?.focus();
+        } else if (this.part.command && command.startsWith(`${this.role}.`)) {
+          this.part.command(command, cx);
         } else if (command.startsWith(`${this.role}.key:`)) {
           const keystroke = command.slice(this.role.length + 5), parts = keystroke.split("-");
           this.part.keyEvent?.({ key: parts.at(-1), keystroke, viaApp: true, modifiers: {

@@ -142,7 +142,7 @@ The diff compares the working tree with the last commit shared by your branch an
 
 | Feature | Behavior |
 |---|---|
-| Source Control panel | Follows the focused terminal or review repository, including pinned/file tabs after reload. Merge, Staged, and Changes sections; file icons; added/deleted counts; stage, unstage, confirmed discard, commit, push, pull, and publish branch. |
+| Source Control panel | Follows the focused terminal or review repository, including pinned/file tabs after reload. Merge, Staged, and Changes sections; change-coloured file names; added/deleted counts; stage, unstage, confirmed discard, commit, push, pull, and publish branch. |
 | Branch switching | Search local and remote branches; create tracking branches; protect conflicting local edits. |
 | Upstream Git actions | Fetch, fast-forward Pull, current-branch Push, Publish branch, and ahead/behind counts. |
 | Remote comparison | Review branch changes and local edits since the last shared commit with `origin/main` or `origin/master`. |
@@ -153,7 +153,7 @@ The diff compares the working tree with the last commit shared by your branch an
 | Inline and side-by-side diffs | Old/new line numbers, added/deleted highlights, and syntax coloring. |
 | File views | Whole-file previews with added, modified, and deleted-line gutter markers. |
 | Neovim integration | Reuses the selected Herdr tab's persistent embedded editor with your configuration, LSP, plugins and keymaps. **⌘-click** also opens lines with a working-file counterpart. |
-| File-type icons | Material Icon Theme icons in the panel and tab headers. |
+| Change colours | File names are coloured by change type (added green, deleted red, renamed purple, modified blue) beside one plain Herdr-style file icon, in the panel, navigator and diff headers. |
 
 ## Install
 
@@ -221,4 +221,4 @@ Visual/pointer verification is not claimed: Herdr's screenshot API returned a ca
 
 ## Credits and license
 
-MIT: see [LICENSE](LICENSE). File icons are from [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme), under its included [MIT license](mods/tabbed-changes/icons/files/LICENSE.txt). Other icons are Lucide-style SVGs (ISC). Inspired by [herdr-git-changes](https://github.com/aBER0724/herdr-git-changes) and Zed's Git panel; no code copied.
+MIT: see [LICENSE](LICENSE). Icons are Lucide-style SVGs (ISC), including the plain file icon, which is the one Herdr's own Files panel uses. Inspired by [herdr-git-changes](https://github.com/aBER0724/herdr-git-changes) and Zed's Git panel; no code copied.

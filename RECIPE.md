@@ -3,7 +3,7 @@
 A Source Control and code-review mod: tabbed diffs, whole-change multibuffer, file views, Neovim, and compact inline feedback on lines or ranges that can be sent to Herdr agents. ![Tabbed Changes](preview.png)
 
 ## What you see
-- **Panel** (dock where Herdr's `changes` block sits): 42px header (branch icon, branch, ↑/↓ counts, layers "all changes", refresh), commit box (textarea + `Commit N staged` button), then sections MERGE CHANGES / STAGED CHANGES / CHANGES with 26px rows: name, folder in `dim`, `+N −N`, status letter (`blocked` M, `ansi2` A/U, `ansi1` D/!).
+- **Panel** (dock where Herdr's `changes` block sits): 42px header (branch icon, branch, ↑/↓ counts, layers "all changes", refresh), commit box (textarea + `Commit N staged` button), then sections MERGE CHANGES / STAGED CHANGES / CHANGES with 26px rows: one plain file icon (Herdr's own Lucide `file`, `muted`), the name coloured by change type (`ansi2` added/untracked, `ansi1` deleted/conflict, `ansi5` renamed, `ansi4` modified), folder in `dim`, `+N −N`, and the status letter in the same colour. The navigator tree and diff file headers colour names the same way; there are no per-file-type icons.
 - **Diff tab**: 44px header with file/commit identity, counts, inline/side-by-side controls and single/all-file mode; a slim loading row only while loading; virtualized code rows and a wrapping shortcut footer. Historical reviews identify the commit and omit working-file/editor/comment actions.
 
 ## How it behaves

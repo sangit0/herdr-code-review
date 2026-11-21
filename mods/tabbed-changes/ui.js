@@ -3,7 +3,7 @@ import { h_flex, v_flex } from "gpui-base";
 import { tokenize, extOf } from "./highlight.js";
 import { Memo } from "./read-cache.js";
 import { splitTokens, wrapTokens } from "./review-model.js";
-import { iconFor } from "./fileicons.js";
+import { changeKind } from "./change-kind.js";
 
 const syntax=new Memo(128,4096);
 
@@ -74,4 +74,8 @@ export function codeLine(text, path, t, spans=[], tone=t.accent, breaks=null, ch
 }
 
 // The file-type icon for a path (Material Icon Theme subset), in colour.
-export const fileIcon = (path, size = 16) => image(`mods/tabbed-changes/icons/files/${iconFor(path)}.svg`).size(size).flex_none();
+// One plain file icon (Herdr's own, drawn in the theme colour): what changed is told by the name's colour, not the file type.
+export const fileIcon = (_path, size = 16, color) => (color ? icon("file", size).text_color(color) : icon("file", size));
+
+// Added green, deleted red, renamed purple, modified blue. `file` is anything changeKind understands.
+export const changeColor = (file, t) => ({ added: t.ansi2, deleted: t.ansi1, renamed: t.ansi5, modified: t.ansi4 })[changeKind(file)];

@@ -12,7 +12,7 @@ import { readGit, invalidateReads, invalidateRepository, REPOSITORY_EVENT } from
 import * as G from "./git.js";
 import { VIEW_KEY, openFileTab, showDiff, showHistory, diffPane, zoomDiff } from "./tabs.js";
 import { reviewToolbar,searchBar,fileNavigator } from "./review-controls.js";
-import { iconButton, toolButton, icon, codeLine, fileIcon, commentGutter, inCommentGutter, COMMENT_GUTTER, CODE_ROW as ROW } from "./ui.js";
+import { iconButton, toolButton, icon, codeLine, changeIcon, changeColor, commentGutter, inCommentGutter, COMMENT_GUTTER, CODE_ROW as ROW } from "./ui.js";
 import { openInEditor, editorLabel } from "./editor.js";
 import { commitPatch } from "./history.js";
 import { reviewAction } from "./shortcut-model.js";
@@ -199,7 +199,7 @@ export class DiffTab {
     this.truncated = false;
     for (const f of this.files) {
       const closed = all && this.collapsed.has(f.path);
-      if (all) out.push({ kind: "file", path: f.path, add: f.add, del: f.del, closed });
+      if (all) out.push({ kind: "file", path: f.path, add: f.add, del: f.del, fresh: f.fresh, closed });
       if (closed) continue;
       let rows = G.diffRows(f.lines);
       for (const r of rows) widest = Math.max(widest, r.text.length);
@@ -611,8 +611,8 @@ export class DiffTab {
     const name = G.basename(r.path), dir = r.path.includes("/") ? r.path.slice(0, r.path.lastIndexOf("/")) : "";
     return h_flex().w_full().h(FILE_ROW).flex_none().px(10).gap(8).items_center().bg(t.raised).border_t(1).border_b(1).border_color(t.border)
       .child(icon(r.closed ? "chevron-right" : "chevron-down", 14).text_color(t.muted))
-      .child(fileIcon(r.path, 16))
-      .child(div().flex_none().text_size(14).font_bold().text_color(t.foreground).child(name))
+      .child(changeIcon(r, 16, t))
+      .child(div().flex_none().text_size(14).font_bold().text_color(changeColor(r, t)).child(name))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(dir))
       .when(r.add > 0, (e) => e.child(div().flex_none().text_size(12).font_bold().text_color(t.ansi2).child(`+${r.add}`)))
       .when(r.del > 0, (e) => e.child(div().flex_none().text_size(12).font_bold().text_color(t.ansi1).child(`−${r.del}`)));
@@ -641,8 +641,8 @@ export class DiffTab {
     const against = commit ? ` · ${commit.subject ?? ""}` : this.comparison !== "local" ? ` · vs ${this.comparisonResolved?.name ?? (this.comparison === "origin" ? "origin default branch" : this.comparison)}` : "";
     const sub = all ? `${this.files.length} file${this.files.length === 1 ? "" : "s"}${against}` : (f?.path?.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : "") + against;
     return h_flex().h(44).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
-      .child(all ? icon("layers", 16).text_color(t.muted) : fileIcon(f?.path ?? "", 18))
-      .child(div().font_bold().text_size(15).flex_none().text_color(t.foreground).child(title))
+      .child(all ? icon("layers", 16).text_color(t.muted) : changeIcon(f ?? {}, 18, t))
+      .child(div().font_bold().text_size(15).flex_none().text_color(all || commit ? t.foreground : changeColor(f ?? {}, t)).child(title))
       .when(this.isHistorical, element => element.child(div().flex_none().text_size(11).text_color(t.muted).child("Read-only commit")))
       .when(Boolean(chip), e => e.child(chip))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(sub))

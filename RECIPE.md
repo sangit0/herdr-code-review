@@ -3,7 +3,7 @@
 A Source Control and code-review mod: tabbed diffs, whole-change multibuffer, file views, Neovim, and compact inline feedback on lines or ranges that can be sent to Herdr agents. ![Tabbed Changes](preview.png)
 
 ## What you see
-- **Panel** (dock where Herdr's `changes` block sits): 42px header (branch icon, branch, ↑/↓ counts, layers "all changes", refresh), commit box (textarea + `Commit N staged` button), then sections MERGE CHANGES / STAGED CHANGES / CHANGES with 26px rows: name, folder in `dim`, `+N −N`, status letter (`blocked` M, `ansi2` A/U, `ansi1` D/!).
+- **Panel** (dock where Herdr's `changes` block sits): 42px header (branch icon, branch, ↑/↓ counts, layers "all changes", refresh), commit box (textarea + `Commit N staged` button), then sections MERGE CHANGES / STAGED CHANGES / CHANGES with 26px rows: a 16px status badge (a rounded square with `+` added, a filled dot modified, `−` deleted, `→` renamed, `!` conflict; drawn with 1.25px strokes in the name's colour), the name coloured by change type (`ansi2` added/untracked, `ansi4` modified, `ansi1` deleted/conflict, `ansi5` renamed), folder in `dim`, and `+N −N`. There is no trailing status letter and there are no per-file-type icons. The navigator tree and the diff file headers use the same badge and colour; the single-file viewer header keeps one plain `file` icon.
 - **Diff tab**: 44px header with file/commit identity, counts, inline/side-by-side controls and single/all-file mode; a slim loading row only while loading; virtualized code rows and a wrapping shortcut footer. Historical reviews identify the commit and omit working-file/editor/comment actions.
 
 ## How it behaves

@@ -226,7 +226,7 @@ export class FileTab {
     return v_flex().id("scm-file").track_focus(this.handle)
       .on_key_down((e, cx) => this.keyEvent(e, cx)).size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground)
       .child(h_flex().h(44).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
-        .child(fileIcon(this.file ?? "", 18))
+        .child(fileIcon(this.file ?? "", 18, t.muted))
         .child(div().font_bold().text_size(15).flex_none().child(name))
         .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(rel && rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : this.file ?? ""))
         .when(this.changed > 0, (e) => e.child(div().flex_none().text_size(12).font_bold().text_color(t.ansi2).child(`${this.changed} changed line${this.changed === 1 ? "" : "s"}`)))

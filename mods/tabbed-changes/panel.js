@@ -10,7 +10,7 @@ import { readGit, invalidateReads, invalidateRepository, REPOSITORY_EVENT } from
 import { resolveOrigin } from "./comparison.js";
 import * as G from "./git.js";
 import { VIEW_KEY, showDiff, updatePreview, openFileTab, showHistory, diffPane, zoomDiff } from "./tabs.js";
-import { iconButton, toolButton, icon, fileIcon } from "./ui.js";
+import { iconButton, toolButton, icon, changeIcon, changeColor } from "./ui.js";
 import { commentsFor } from "./comments.js";
 import { openInEditor, editorLabel } from "./editor.js";
 import { reviewAction } from "./shortcut-model.js";
@@ -362,7 +362,7 @@ export class Panel {
       .child(label);
   }
 
-  statusColor(s, t) { return s === "A" || s === "U" ? t.ansi2 : s === "D" || s === "!" ? t.ansi1 : s === "R" ? t.ansi4 : t.ansi3; }
+  statusColor(s, t) { return changeColor({ status: s }, t); }
 
   fileRow(f, t, shown) {
     const parts = f.path.split("/"), name = parts.pop(), id = `${f.group}:${f.path}`;
@@ -376,7 +376,7 @@ export class Panel {
         actions.push(iconButton(`nvim-${id}`, "terminal", t, (cx) => this.openEditor(f, cx), { title: `Open in ${editorLabel()}` }));
         actions.push(iconButton(`open-${id}`, "file-open", t, () => this.openFile(f), { title: "Open file in a tab" }));
       }
-      if (f.group === "changes") actions.push(iconButton(`discard-${id}`, "undo", t, (cx) => { this.confirm = id; cx.notify(); }, { title: "Discard changes" }));
+      if (f.group === "changes") actions.push(iconButton(`discard-${id}`, "discard", t, (cx) => { this.confirm = id; cx.notify(); }, { title: "Discard changes" }));
       if (f.group === "staged") actions.push(iconButton(`unstage-${id}`, "minus", t, (cx) => this.unstage([f], cx), { title: "Unstage" }));
       else actions.push(iconButton(`stage-${id}`, "plus", t, (cx) => this.stage([f], cx), { title: "Stage" }));
     }
@@ -388,15 +388,14 @@ export class Panel {
         cx.notify();
       })
       .on_click((e, cx) => this.pick(f, e.click_count ?? 1, cx))
-      .child(fileIcon(f.path, 16))
+      .child(changeIcon({ status: f.status }, 16, t))
       .child(h_flex().flex_1().min_w(0).overflow_hidden().gap(6)
-        .child(div().max_w(220).min_w(24).truncate().text_color(f.status === "D" ? t.dim : t.foreground).child(name))
+        .child(div().max_w(220).min_w(24).truncate().text_color(this.statusColor(f.status, t)).child(name))
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(parts.join("/"))))
       .when(actions.length > 0, (e) => e.child(h_flex().flex_none().gap(2).children(actions)))
       .when(actions.length === 0 && (f.add > 0 || f.del > 0), (e) => e.child(h_flex().flex_none().gap(5).text_size(11)
         .when(f.add > 0, (r) => r.child(div().text_color(t.ansi2).child(`+${f.add}`)))
-        .when(f.del > 0, (r) => r.child(div().text_color(t.ansi1).child(`−${f.del}`)))))
-      .child(div().w(14).flex_none().text_right().text_size(11).font_semibold().text_color(this.statusColor(f.status, t)).child(f.status));
+        .when(f.del > 0, (r) => r.child(div().text_color(t.ansi1).child(`−${f.del}`)))));
   }
 
   sectionHeader(section, files, t) {
@@ -405,7 +404,7 @@ export class Panel {
     if (this.confirm === all) {
       actions.push(this.pill(`ok-${all}`, "Discard all", t, (cx) => this.discard(files, cx)));
     } else {
-      if (id === "changes") actions.push(iconButton("discard-all", "undo", t, (cx) => { this.confirm = all; cx.notify(); }, { title: "Discard all changes" }));
+      if (id === "changes") actions.push(iconButton("discard-all", "discard", t, (cx) => { this.confirm = all; cx.notify(); }, { title: "Discard all changes" }));
       if (id === "staged") actions.push(iconButton("unstage-all", "minus", t, (cx) => this.unstage(files, cx), { title: "Unstage all" }));
       else actions.push(iconButton(`stage-all-${id}`, "plus", t, (cx) => this.stage(files, cx), { title: "Stage all" }));
     }
@@ -423,10 +422,10 @@ export class Panel {
     return h_flex().h(36).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border)
       .child(div().flex_1().text_size(11).font_semibold().text_color(t.muted).child("SOURCE CONTROL"))
       .when(Boolean(this.root), e => e
-        .when(Boolean(this.originBase), el => el.child(iconButton("compare-default-branch", "columns", t, cx => this.compareOrigin(cx), { title: `Review changes against ${this.originBase.name}` })))
+        .when(Boolean(this.originBase), el => el.child(iconButton("compare-default-branch", "compare", t, cx => this.compareOrigin(cx), { title: `Review changes against ${this.originBase.name}` })))
         .child(this.commentsButton(t))
         .child(iconButton("review-history", "history", t, () => showHistory(this.source()), { title: "Commit history (l)" }))
-        .child(iconButton("all-changes","file-diff",t,cx=>this.openAll(cx),{title:"Open all changes"}))
+        .child(iconButton("all-changes","layers",t,cx=>this.openAll(cx),{title:"Open all changes"}))
         .child(iconButton("refresh","refresh",t,cx=>{invalidateReads();this.refresh(cx);},{title:"Refresh Source Control"})));
   }
   // The review comments live in a small header icon beside History; the count rides on it as a badge.

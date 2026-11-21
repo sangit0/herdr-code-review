@@ -1,7 +1,7 @@
 // Controls are built during render; virtual rows only describe data and visuals.
 import {div} from 'gpui-kit';
 import {h_flex,v_flex,Input,v_virtual_list,Scrollbar} from 'gpui-base';
-import {iconButton,toolButton,icon,fileIcon,changeColor} from './ui.js';
+import {iconButton,toolButton,icon,changeIcon,changeColor} from './ui.js';
 export function reviewToolbar(view,t) {
   const moreContext = view.contextLines > 3;
   // Narrow pane: icon-only buttons (labels stay as tooltips) so the toolbar is never cut off.
@@ -45,7 +45,7 @@ export function fileNavigator(view,t) {
       .child(div().w(8).flex_none())
       .children(Array.from({length:n.depth},()=>div().w(12).h_full().flex_none().flex().justify_center().child(div().w(1).h_full().bg(t.border))))
       .child(div().w(16).flex_none().flex().items_center().justify_center()
-        .child(n.kind==='folder'?icon(n.closed?'chevron-right':'chevron-down',12).text_color(t.dim):fileIcon(n.path,14,t.muted)))
+        .child(n.kind==='folder'?icon(n.closed?'chevron-right':'chevron-down',12).text_color(t.dim):changeIcon(n.file??{},14,t)))
       .child(div().w(4).flex_none())
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(n.kind==='folder'?t.muted:changeColor(n.file??{},t)).when(active(n),e=>e.font_medium()).child(n.name))
       .when(add>0,e=>e.child(div().flex_none().ml(6).text_size(10).text_color(t.ansi2+'d0').child('+'+add)))

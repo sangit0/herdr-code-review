@@ -153,7 +153,7 @@ The diff compares the working tree with the last commit shared by your branch an
 | Inline and side-by-side diffs | Old/new line numbers, added/deleted highlights, and syntax coloring. |
 | File views | Whole-file previews with added, modified, and deleted-line gutter markers. |
 | Neovim integration | Reuses the selected Herdr tab's persistent embedded editor with your configuration, LSP, plugins and keymaps. **⌘-click** also opens lines with a working-file counterpart. |
-| Change colours | File names are coloured by change type (added green, deleted red, renamed purple, modified blue) beside one plain Herdr-style file icon, in the panel, navigator and diff headers. |
+| Change badges | Each changed file shows one small status badge (`+` added, filled dot modified, `−` deleted, `→` renamed, `!` conflict) and a name coloured to match (green, blue, red, purple), in the panel, navigator and diff headers. The file viewer keeps one plain Herdr-style file icon. |
 
 ## Install
 

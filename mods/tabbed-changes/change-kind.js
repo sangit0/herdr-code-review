@@ -3,7 +3,8 @@
 export function changeKind({ status, fresh, add, del } = {}) {
   const s = String(status ?? "").toUpperCase();
   if (s === "A" || s === "U" || fresh) return "added";
-  if (s === "D" || s === "!") return "deleted";
+  if (s === "!") return "conflict";
+  if (s === "D") return "deleted";
   if (s === "R" || s === "C") return "renamed";
   if (!s && add === 0 && del > 0) return "deleted";
   return "modified";

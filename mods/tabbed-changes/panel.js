@@ -10,7 +10,7 @@ import { readGit, invalidateReads, invalidateRepository, REPOSITORY_EVENT } from
 import { resolveOrigin } from "./comparison.js";
 import * as G from "./git.js";
 import { VIEW_KEY, showDiff, updatePreview, openFileTab, showHistory, diffPane, zoomDiff } from "./tabs.js";
-import { iconButton, toolButton, icon, fileIcon, changeColor } from "./ui.js";
+import { iconButton, toolButton, icon, changeIcon, changeColor } from "./ui.js";
 import { commentsFor } from "./comments.js";
 import { openInEditor, editorLabel } from "./editor.js";
 import { reviewAction } from "./shortcut-model.js";
@@ -388,15 +388,14 @@ export class Panel {
         cx.notify();
       })
       .on_click((e, cx) => this.pick(f, e.click_count ?? 1, cx))
-      .child(fileIcon(f.path, 16, t.muted))
+      .child(changeIcon({ status: f.status }, 16, t))
       .child(h_flex().flex_1().min_w(0).overflow_hidden().gap(6)
         .child(div().max_w(220).min_w(24).truncate().text_color(this.statusColor(f.status, t)).child(name))
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(parts.join("/"))))
       .when(actions.length > 0, (e) => e.child(h_flex().flex_none().gap(2).children(actions)))
       .when(actions.length === 0 && (f.add > 0 || f.del > 0), (e) => e.child(h_flex().flex_none().gap(5).text_size(11)
         .when(f.add > 0, (r) => r.child(div().text_color(t.ansi2).child(`+${f.add}`)))
-        .when(f.del > 0, (r) => r.child(div().text_color(t.ansi1).child(`−${f.del}`)))))
-      .child(div().w(14).flex_none().text_right().text_size(11).font_semibold().text_color(this.statusColor(f.status, t)).child(f.status));
+        .when(f.del > 0, (r) => r.child(div().text_color(t.ansi1).child(`−${f.del}`)))));
   }
 
   sectionHeader(section, files, t) {

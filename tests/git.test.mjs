@@ -31,7 +31,7 @@ assert.deepEqual(lm.marks, { 2: "add", 3: "add", 7: "mod" }); assert.deepEqual([
 console.log("lineMarks ok");
 import { changeKind } from "../mods/tabbed-changes/change-kind.js";
 assert.equal(changeKind({ status: "A" }), "added"); assert.equal(changeKind({ status: "U" }), "added"); assert.equal(changeKind({ fresh: true, add: 3, del: 0 }), "added");
-assert.equal(changeKind({ status: "D" }), "deleted"); assert.equal(changeKind({ status: "!" }), "deleted"); assert.equal(changeKind({ add: 0, del: 4 }), "deleted");
+assert.equal(changeKind({ status: "D" }), "deleted"); assert.equal(changeKind({ status: "!" }), "conflict"); assert.equal(changeKind({ add: 0, del: 4 }), "deleted");
 assert.equal(changeKind({ status: "R" }), "renamed"); assert.equal(changeKind({ status: "C" }), "renamed");
 assert.equal(changeKind({ status: "M" }), "modified"); assert.equal(changeKind({ add: 2, del: 1 }), "modified"); assert.equal(changeKind({}), "modified"); assert.equal(changeKind(), "modified");
 assert.equal(changeKind({ status: "M", add: 0, del: 4 }), "modified", "a status letter beats the counts");

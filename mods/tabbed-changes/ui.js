@@ -78,4 +78,7 @@ export function codeLine(text, path, t, spans=[], tone=t.accent, breaks=null, ch
 export const fileIcon = (_path, size = 16, color) => (color ? icon("file", size).text_color(color) : icon("file", size));
 
 // Added green, deleted red, renamed purple, modified blue. `file` is anything changeKind understands.
-export const changeColor = (file, t) => ({ added: t.ansi2, deleted: t.ansi1, renamed: t.ansi5, modified: t.ansi4 })[changeKind(file)];
+export const changeColor = (file, t) => ({ added: t.ansi2, deleted: t.ansi1, conflict: t.ansi1, renamed: t.ansi5, modified: t.ansi4 })[changeKind(file)];
+
+// The file's status as one small badge in the same colour: + added, filled dot modified, − deleted, → renamed, ! conflict.
+export const changeIcon = (file, size, t) => icon(`file-${changeKind(file)}`, size).text_color(changeColor(file, t));

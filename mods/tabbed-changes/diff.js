@@ -718,7 +718,11 @@ export class DiffTab {
     const closeReq = shared(CLOSE_THREAD_KEY);
     if (closeReq && closeReq.at > this.closeSeen) {
       this.closeSeen = closeReq.at;
-      if (this.selectedRow && this.selection?.path === closeReq.path) { this.selectedRow = null; this.pendingCommentOpen = false; this.handle.focus(); this.resizeRows(); }
+      if (this.selectedRow && this.selection?.path === closeReq.path) {
+        this.selectedRow = null; this.pendingCommentOpen = false; this.resizeRows();
+        // focus() is not allowed while rendering (it breaks the view): do it right after.
+        cx.timer.after(0, () => this.handle.focus());
+      }
     }
     const shell = (children) => v_flex().id("scm-diff").track_focus(this.handle)
       .on_key_down((event, cx) => this.keyEvent(event, cx)).size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).children(children);

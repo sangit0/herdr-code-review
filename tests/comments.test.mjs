@@ -23,6 +23,24 @@ assert.equal(calls[0][1],'t1','a finished (done) agent is sendable, without the 
 await assert.rejects(()=>C.deliverComments({notes:[note],target:'t1',space:'s1',agents:[{...target,status:'working'}],send:async()=>assert.fail()}),/idle/i);
 await assert.rejects(()=>C.deliverComments({notes:[note],target:'t1',space:'s2',agents:[target],send:async()=>assert.fail()}),/agent/i);
 await assert.rejects(()=>C.deliverComments({notes:[note],target:'t1',space:'s1',agents:[target],send:async()=>({code:1,stderr:'offline'})}),/offline/);
+// editing a comment, and what Enter does in each state of the inline thread
+{
+  const old = { id: 'n1', text: 'old', path: 'a.ts', line: 3, side: 'new', createdAt: 5, sentAt: null };
+  const next = C.updateComment(old, '  new text  ');
+  assert.equal(next.text, 'new text'); assert.equal(next.id, 'n1'); assert.equal(next.line, 3); assert.equal(next.createdAt, 5); assert.ok(next.editedAt > 0);
+  assert.throws(() => C.updateComment(old, '   '), /Write a comment/); assert.throws(() => C.updateComment(old, ''), /Write a comment/); assert.throws(() => C.updateComment(old, 'x'.repeat(10001)), /10,000/);
+  assert.equal(old.text, 'old', 'the original is not mutated');
+  const u = [old];
+  assert.equal(C.threadEnter({ composing: true, editing: false }), 'save');
+  assert.equal(C.threadEnter({ composing: true, editing: true }), 'update');
+  assert.equal(C.threadEnter({ composing: false, unsent: [], idleCount: 2, target: 't1', targetIdle: true }), 'none', 'nothing to send');
+  assert.equal(C.threadEnter({ composing: false, unsent: u, idleCount: 0 }), 'no-agent');
+  assert.equal(C.threadEnter({ composing: false, unsent: u, idleCount: 2, target: null }), 'pick-agent', 'several agents and none chosen: ask');
+  assert.equal(C.threadEnter({ composing: false, unsent: u, idleCount: 2, target: 't9', targetIdle: false }), 'pick-agent', 'the chosen agent is gone or busy');
+  assert.equal(C.threadEnter({ composing: false, unsent: u, idleCount: 1, target: 't1', targetIdle: true }), 'send');
+  const a = { id: 'a', createdAt: 1, sentAt: null }, b = { id: 'b', createdAt: 9, sentAt: null }, c = { id: 'c', createdAt: 20, sentAt: 'x' };
+  assert.equal(C.newestUnsent([a, b, c]).id, 'b'); assert.equal(C.newestUnsent([c]), null); assert.equal(C.newestUnsent([]), null);
+}
 // batch: one message, all removed afterwards; nothing removed when delivery fails
 { const store=[{...note,id:'a'},{...note,id:'b'},{...note,id:'c'}]; const sent=[];
   await C.sendAllAndRemove({notes:store.slice(0,2),target:'t1',space:'s1',agents:[target],send:async args=>{sent.push(args);return {code:0};},read:()=>store,write:next=>{store.splice(0,store.length,...next);}});

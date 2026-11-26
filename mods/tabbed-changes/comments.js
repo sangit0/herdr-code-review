@@ -2,7 +2,7 @@
 import { View, div } from 'gpui-kit';
 import { v_flex, h_flex, TextareaState, Textarea } from 'gpui-base';
 import { spaces, agents, shared, setShared, theme, hc } from 'herdr';
-import { makeComment, forSource, forLine, sendAndRemove, sendAllAndRemove, defaultTarget, isOutdated, lineLabel } from './comment-model.js';
+import { makeComment, updateComment, threadEnter, newestUnsent, forSource, forLine, sendAndRemove, sendAllAndRemove, defaultTarget, isOutdated, lineLabel } from './comment-model.js';
 export { defaultTarget };
 import { icon } from './ui.js';
 
@@ -17,6 +17,13 @@ export const busyCommentAgents = space => agents().filter(a => a.space === space
 // Deleting a line's last comment asks the open diff to close its inline panel (see DiffTab.render).
 export const CLOSE_THREAD_KEY = 'tabbed-changes.close-thread';
 export const removeSavedComment = id => setShared(KEY, allNotes().filter(note => note.id !== id));
+export const updateSavedComment = (id, text) => {
+  const note = allNotes().find(n => n.id === id);
+  if (!note) throw new Error('That comment no longer exists.');
+  const next = updateComment(note, text);
+  setShared(KEY, allNotes().map(n => (n.id === id ? next : n)));
+  return next;
+};
 export const sendSavedComment = (note, target, space) =>
   sendAndRemove({ note, target, space, agents: agents(), send: args => hc(args), read: allNotes, write: next => setShared(KEY, next) });
 export const sendSavedComments = (notes, target, space) =>
@@ -52,11 +59,14 @@ export class InlineComments extends View {
   init(p, cx) {
     this.context=p?.context ?? null; this.space=p?.space ?? spaces().find(s=>s.active)?.id;
     this.references=p?.references ?? [];
-    this.drafts = {};
+    this.drafts = {}; this.editing = null; this.stash = ''; this.lastEnter = 0;
+    this.handle = cx.focus_handle();
     this.target=null; this.busy=false; this.error=null; this.note=null;
     this.composing = !lineComments(this.context).length;
     this.input=TextareaState.new({placeholder:'Write your review comment…',rows:3});
-    this.input.on('change',(_e,cx)=>{this.drafts[this.draftKey()]=this.input.value();cx.notify();});
+    this.input.on('change',(_e,cx)=>{ if (!this.editing) this.drafts[this.draftKey()]=this.input.value(); cx.notify();});
+    // Enter in the editor saves; Shift+Enter stays a new line. A key event and a submit event can both arrive for one press: act once.
+    this.input.on('submit',(e,cx)=>{ if (!e?.shift && !e?.secondary) this.enter(cx); });
   }
   draftKey() { const c=this.context; return JSON.stringify(c?[c.source,c.path,c.line,c.endLine??c.line,c.side,c.base??null,c.revision??null]:null); }
   update(p) {
@@ -65,12 +75,60 @@ export class InlineComments extends View {
     this.context=p?.context ?? null; this.space=p?.space ?? this.space;
     this.references=p?.references ?? this.references;
     if (previousKey !== this.draftKey() || p?.focus) {
+      this.editing = null;
       this.error = null;
       this.note = null;
       this.composing = Boolean(p?.compose) || !lineComments(this.context).length;
       this.input.set_value(this.drafts[this.draftKey()] ?? '');
     }
-    if (p?.focus && this.composing) this.input.focus();
+    if (p?.focus) { if (this.composing) this.input.focus(); else this.handle.focus(); }
+  }
+  enter(cx) {
+    const now = Date.now();
+    if (now - this.lastEnter < 150) return;
+    this.lastEnter = now;
+    const notes = lineComments(this.context), unsent = notes.filter(n => !n.sentAt), idle = idleCommentAgents(this.space);
+    const action = threadEnter({ composing: this.composing, editing: Boolean(this.editing), unsent, target: this.target, idleCount: idle.length, targetIdle: idle.some(a => a.address === this.target) });
+    if (action === 'save') this.save(cx);
+    else if (action === 'update') this.update_edit(cx);
+    else if (action === 'send') this.send(newestUnsent(unsent), cx);
+    else if (action === 'pick-agent') { this.error = 'Pick an agent above to send this comment to.'; this.note = null; cx.notify(); }
+    else if (action === 'no-agent') { this.error = 'No idle agent in this space. Start one, then press Enter again.'; this.note = null; cx.notify(); }
+    cx.notify();
+  }
+  startEdit(note, cx) {
+    if (this.busy || note.sentAt) return;
+    this.stash = this.input.value();
+    this.editing = note.id;
+    this.composing = true;
+    this.error = this.note = null;
+    this.input.set_value(note.text);
+    this.input.focus();
+    cx.notify();
+  }
+  cancelEdit(cx) {
+    if (!this.editing) return;
+    this.editing = null; this.composing = false;
+    this.input.set_value(this.stash || ''); this.stash = '';
+    this.error = null; this.note = null;
+    this.handle.focus();
+    cx.notify();
+  }
+  update_edit(cx) {
+    if (this.busy || !this.editing) return;
+    try {
+      updateSavedComment(this.editing, this.input.value());
+      this.editing = null; this.composing = false;
+      this.input.set_value(this.stash || ''); this.stash = '';
+      this.error = null; this.note = 'Comment updated. Press Enter to send it.';
+      this.handle.focus();
+    } catch(e) { this.error = String(e.message ?? e); }
+    cx.notify();
+  }
+  keyEvent(event, cx) {
+    const k = event.keystroke;
+    if (k === 'enter') { cx.stop_propagation(); this.enter(cx); }
+    else if (k === 'escape' && this.editing) { cx.stop_propagation(); this.cancelEdit(cx); }
   }
   save(cx) {
     if(this.busy)return;
@@ -107,8 +165,9 @@ export class InlineComments extends View {
     return v_flex().flex_1().min_h(0).gap(6)
       .child(div().h(66).flex_none().px(9).py(5).bg(t.background).border(1).border_color(t.input).rounded(6)
         .child(Textarea.new(this.input).w_full().text_size(13)))
-      .child(h_flex().justify_end()
-        .child(commentButton('line-comment-save', 'Save comment', t, cx => this.save(cx),
+      .child(h_flex().justify_end().gap(6)
+        .when(Boolean(this.editing), e => e.child(commentButton('line-comment-cancel', 'Cancel', t, cx => this.cancelEdit(cx))))
+        .child(commentButton('line-comment-save', this.editing ? 'Update comment' : 'Save comment', t, cx => (this.editing ? this.update_edit(cx) : this.save(cx)),
           { primary: true, enabled: Boolean(this.input.value().trim()) && !this.busy })));
   }
   saved(t, notes) {
@@ -130,7 +189,9 @@ export class InlineComments extends View {
     return savedCommentCard(t)
       .when(isOutdated(note, this.references), e => e.child(div().text_size(10).text_color(t.ansi3).child('Outdated · code changed since this comment')))
       .child(div().w_full().min_w(0).text_size(13).whitespace_normal().child(note.text))
+      .when(Boolean(note.editedAt), e => e.child(div().text_size(10).text_color(t.muted).child('edited')))
       .child(h_flex().gap(6).items_center().justify_end()
+        .when(!note.sentAt, e => e.child(commentButton(`line-edit-${note.id}`, 'Edit', t, cx => this.startEdit(note, cx), { enabled: !this.busy })))
         .child(commentButton(`line-delete-${note.id}`, 'Delete', t, cx => {
           removeSavedComment(note.id);
           this.note = 'Comment deleted.';
@@ -146,8 +207,8 @@ export class InlineComments extends View {
   render() {
     const t = theme(), context = this.context, notes = lineComments(context);
     const label = context ? `Line ${lineLabel(context)} · ${context.side === 'old' ? 'Original' : 'Current'} code` : 'Review comment';
-    const hint = this.composing ? 'Saved locally · Esc to close' : 'Esc to close';
-    return div().w_full().max_w(600).h(INLINE_COMMENT_HEIGHT).flex_none().p(6)
+    const hint = this.editing ? 'Enter to update · Shift+Enter new line · Esc to cancel' : this.composing ? 'Enter to save · Shift+Enter new line · Esc to close' : notes.some(n => !n.sentAt) ? 'Enter to send to the selected agent · Esc to close' : 'Esc to close';
+    return div().id('inline-thread').track_focus(this.handle).on_key_down((e, cx) => this.keyEvent(e, cx)).w_full().max_w(600).h(INLINE_COMMENT_HEIGHT).flex_none().p(6)
       .child(v_flex().size_full().min_h(0).px(11).py(8).gap(7).rounded(8)
         .bg(t.popover).border(1).border_color(t.border).text_color(t.foreground).text_size(12)
         .on_mouse_down('left', (_e, cx) => cx.stop_propagation())

@@ -24,6 +24,23 @@ export function formatComments(notes) {
   return ['Please address these code review comments. Code and line numbers are snapshots from when each comment was saved; verify them against the current files.',
     ...notes.map(n => `\nRepository: ${n.source.root}${n.source.on ? ` (machine: ${n.source.on})` : ''}\n${n.path}:${lineLabel(n)} (${n.side}${n.base?`, base ${n.base} @ ${n.revision}`:''})\nCode snapshot: ${JSON.stringify(n.code)}\nComment: ${n.text}`)].join('\n');
 }
+// An edited comment: same checks as a new one, same id and place, new text.
+export function updateComment(note, text) {
+  if (!String(text ?? '').trim()) throw new Error('Write a comment first.');
+  if (text.length > 10000) throw new Error('Keep each comment under 10,000 characters.');
+  return { ...note, text: text.trim(), editedAt: Date.now() };
+}
+// What Enter does in an inline thread. In the editor it saves (a new comment) or updates (an edit); Shift+Enter is a new line and never
+// reaches this. In the saved list it sends the newest unsent comment to the selected agent, or says what is missing.
+//   -> 'save' | 'update' | 'send' | 'pick-agent' | 'no-agent' | 'none'
+export function threadEnter({ composing, editing, unsent = [], target = null, idleCount = 0, targetIdle = false }) {
+  if (composing) return editing ? 'update' : 'save';
+  if (!unsent.length) return 'none';
+  if (idleCount === 0) return 'no-agent';
+  if (!target || !targetIdle) return 'pick-agent';
+  return 'send';
+}
+export const newestUnsent = (notes) => notes.filter((n) => !n.sentAt).sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0] ?? null;
 export async function deliverComments({ notes, target, space, agents, send }) {
   const agent = agents.find(a => a.address === target && a.space === space);
   if (!agent) throw new Error('Choose a live agent in this space.');

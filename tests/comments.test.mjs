@@ -23,6 +23,18 @@ assert.equal(calls[0][1],'t1','a finished (done) agent is sendable, without the 
 await assert.rejects(()=>C.deliverComments({notes:[note],target:'t1',space:'s1',agents:[{...target,status:'working'}],send:async()=>assert.fail()}),/idle/i);
 await assert.rejects(()=>C.deliverComments({notes:[note],target:'t1',space:'s2',agents:[target],send:async()=>assert.fail()}),/agent/i);
 await assert.rejects(()=>C.deliverComments({notes:[note],target:'t1',space:'s1',agents:[target],send:async()=>({code:1,stderr:'offline'})}),/offline/);
+// Herdr's list shows a finished-and-seen agent as "idle", but hc still has it as "done" and refuses the --if idle guard: retry once without it.
+const doneRefusal={code:1,stdout:'{"error":{"hint":"nothing was typed","kind":"status_mismatch","message":"t1 is done, not idle"}}',stderr:''};
+calls=[];await C.deliverComments({notes:[note],target:'t1',space:'s1',agents:[target],send:async args=>{calls.push(args);return calls.length===1?doneRefusal:{code:0};}});
+assert.equal(calls.length,2,'one guarded attempt, one retry');assert.deepEqual(calls[0].slice(0,4),['send','--if','idle','t1']);assert.equal(calls[1][1],'t1','the retry has no --if guard');
+// a refusal because the agent is really working is NOT retried, and is shown as a plain sentence
+const workingRefusal={code:1,stdout:'{"error":{"hint":"nothing was typed","kind":"status_mismatch","message":"t1 is working, not idle"}}',stderr:''};
+calls=[];await assert.rejects(()=>C.deliverComments({notes:[note],target:'t1',space:'s1',agents:[target],send:async args=>{calls.push(args);return workingRefusal;}}),e=>e.message==='t1 is working, not idle');
+assert.equal(calls.length,1,'no retry when the agent is working');
+// a retry that fails too reports its own error; other failures keep their text
+await assert.rejects(()=>C.deliverComments({notes:[note],target:'t1',space:'s1',agents:[target],send:async args=>args.includes('--if')?doneRefusal:{code:1,stderr:'offline'}}),/offline/);
+assert.equal(C.readableError({code:1,stderr:'offline'}),'offline');assert.equal(C.readableError(doneRefusal),'t1 is done, not idle');assert.equal(C.readableError({code:1,stdout:'',stderr:''}),'');
+assert.equal(C.refusedBecauseDone({code:0}),false);assert.equal(C.refusedBecauseDone(workingRefusal),false);assert.equal(C.refusedBecauseDone(doneRefusal),true);
 // batch: one message, all removed afterwards; nothing removed when delivery fails
 { const store=[{...note,id:'a'},{...note,id:'b'},{...note,id:'c'}]; const sent=[];
   await C.sendAllAndRemove({notes:store.slice(0,2),target:'t1',space:'s1',agents:[target],send:async args=>{sent.push(args);return {code:0};},read:()=>store,write:next=>{store.splice(0,store.length,...next);}});

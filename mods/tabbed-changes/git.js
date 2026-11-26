@@ -46,7 +46,7 @@ export function parseNumstat(stdout) {
   return stats;
 }
 
-// `git status --porcelain=v1 -z -b --no-renames --untracked-files=all` -> sections.
+// `git status --porcelain=v1 -z -b --no-renames --untracked-files=normal` -> sections (untracked directories are expanded afterwards, see expandUntracked).
 export function parseStatus(stdout, cached = {}, worktree = {}) {
   const staged = [], changes = [], conflicts = [];
   let branch = null;
@@ -61,6 +61,50 @@ export function parseStatus(stdout, cached = {}, worktree = {}) {
     if (y !== " ") changes.push({ path, group: "changes", status: letter(y), add: 0, del: 0, ...worktree[path] });
   }
   return { branch, staged, changes, conflicts, limited: entries.length > LIMIT };
+}
+
+// Listing every untracked file with `status --untracked-files=all` or `ls-files --others` walks the whole worktree: seconds in a
+// big monorepo even when nothing is untracked. `--untracked-files=normal` is fast and reports an untracked directory as one
+// "dir/" entry, so ask for the files of just those directories.
+export const UNTRACKED_DIR = (path) => path.endsWith("/");
+
+// `git ls-files --others --exclude-standard -z -- <dirs>` -> the untracked files inside those directories.
+export function untrackedInDirs(dirs, stdout) {
+  const found = String(stdout ?? "").split("\0").filter(Boolean);
+  const byDir = new Map(dirs.map((d) => [d, []]));
+  for (const file of found) {
+    const dir = dirs.find((d) => file.startsWith(d));
+    if (dir) byDir.get(dir).push(file);
+  }
+  return byDir;
+}
+
+// Replaces "dir/" entries of a parsed status with the files inside them. A directory with nothing listed (for example a
+// nested repository, which git shows as one entry) stays as the directory entry. Never grows `changes` past `limit`.
+export function expandUntracked(parsed, byDir, limit = LIMIT) {
+  const out = [];
+  let limited = parsed.limited;
+  for (const entry of parsed.changes) {
+    const files = entry.status === "U" && UNTRACKED_DIR(entry.path) ? byDir.get(entry.path) : null;
+    if (!files?.length) { out.push(entry); continue; }
+    for (const path of files) {
+      if (out.length >= limit) { limited = true; break; }
+      out.push({ ...entry, path });
+    }
+  }
+  parsed.changes = out; parsed.limited = limited;
+  return parsed;
+}
+
+// All untracked files, the fast way. `git(args)` runs git in the repository and returns its stdout.
+export async function listUntracked(git) {
+  const top = (await git(["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=normal"])).split("\0").filter((e) => e.startsWith("?? ")).map((e) => e.slice(3));
+  const dirs = top.filter(UNTRACKED_DIR);
+  const files = top.filter((p) => !UNTRACKED_DIR(p));
+  if (!dirs.length) return files;
+  const byDir = untrackedInDirs(dirs, await git(["ls-files", "--others", "--exclude-standard", "-z", "--", ...dirs]));
+  for (const dir of dirs) { const inside = byDir.get(dir); if (inside.length) files.push(...inside); else files.push(dir); }
+  return files;
 }
 
 // Numbers each diff line once, so a frame only draws the rows on screen.

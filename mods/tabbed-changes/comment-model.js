@@ -31,10 +31,22 @@ export async function deliverComments({ notes, target, space, agents, send }) {
   if (agent.status !== 'idle' && agent.status !== 'done') throw new Error('The agent must be idle (or finished) before sending.');
   const message = formatComments(notes);
   if (message.length > 60000) throw new Error('Send fewer comments at once (maximum 60,000 characters).');
-  const result = await send(agent.status === 'idle' ? ['send', '--if', 'idle', agent.address, message] : ['send', agent.address, message]);
-  if (result.code !== 0) throw new Error(result.stderr?.trim() || result.stdout?.trim() || 'The agent did not accept the comments.');
+  const plain = ['send', agent.address, message];
+  let result = await send(agent.status === 'idle' ? ['send', '--if', 'idle', agent.address, message] : plain);
+  // Herdr's list calls a finished turn you have already seen "idle", but hc still has it as "done": waiting at its prompt, safe to
+  // send to. Its --if guard then refuses ("t8v is done, not idle") although nothing is wrong, so retry that case once without it.
+  if (agent.status === 'idle' && refusedBecauseDone(result)) result = await send(plain);
+  if (result.code !== 0) throw new Error(readableError(result) || 'The agent did not accept the comments.');
   return result;
 }
+const outputOf = r => `${r?.stderr ?? ''}${r?.stdout ?? ''}`.trim();
+// hc reports errors as {"error":{"kind":...,"message":...}}: show the message, not the JSON.
+export function readableError(result) {
+  const text = outputOf(result);
+  try { const e = JSON.parse(text)?.error; if (e?.message) return String(e.message); } catch { /* not JSON */ }
+  return text;
+}
+export const refusedBecauseDone = r => r?.code !== 0 && /"kind"\s*:\s*"status_mismatch"/.test(outputOf(r)) && /\bis done\b/.test(outputOf(r));
 export const forLine = (notes, context) => context ? forSource(notes, context.source).filter(n=>n.path===context.path && n.line<=context.line && (n.endLine??n.line)>=context.line && n.side===context.side && (n.base??null)===(context.base??null)) : [];
 // A refresh may replace row objects. Retain the inline editor only at an exact snapshot match.
 export function findMatchingRow(rows, context) {

@@ -36,3 +36,44 @@ assert.equal(changeKind({ status: "R" }), "renamed"); assert.equal(changeKind({ 
 assert.equal(changeKind({ status: "M" }), "modified"); assert.equal(changeKind({ add: 2, del: 1 }), "modified"); assert.equal(changeKind({}), "modified"); assert.equal(changeKind(), "modified");
 assert.equal(changeKind({ status: "M", add: 0, del: 4 }), "modified", "a status letter beats the counts");
 console.log("change kind ok");
+
+// --- fast untracked listing (status --untracked-files=normal + files of the untracked directories only) ---
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import * as GU from "../mods/tabbed-changes/git.js";
+{
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "untracked-")));
+  const run = (args, cwd = root) => execFileSync("git", args, { cwd, encoding: "utf8" });
+  run(["init", "-q", "-b", "main"]); run(["config", "user.email", "t@example.com"]); run(["config", "user.name", "t"]);
+  const put = (p, text = "x\n") => { mkdirSync(join(root, p, ".."), { recursive: true }); writeFileSync(join(root, p), text); };
+  put(".gitignore", "ignored/\n*.log\n"); put("tracked.txt"); run(["add", "-A"]); run(["commit", "-qm", "init"]);
+  put("top.txt"); put("newdir/a.txt"); put("newdir/sub/deep/b.txt"); put("my dir/with space.txt"); put("ünï/ç.txt"); put("ignored/x.txt"); put("newdir/skip.log");
+  mkdirSync(join(root, "emptydir"), { recursive: true });
+  mkdirSync(join(root, "nested")); run(["init", "-q", "-b", "main"], join(root, "nested")); put("nested/file.txt");
+  const git = async (args) => run([...GU.READ, ...args]);
+  const reference = run([...GU.READ, "ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
+  const fast = (await GU.listUntracked(git)).sort();
+  assert.deepEqual(fast, reference, "the fast listing equals ls-files --others");
+  assert.ok(fast.includes("newdir/sub/deep/b.txt") && fast.includes("my dir/with space.txt") && fast.includes("ünï/ç.txt") && fast.includes("top.txt"));
+  assert.ok(!fast.some((p) => p.startsWith("ignored/") || p.endsWith(".log")), "ignored files stay out");
+  // nothing untracked -> nothing, and no ls-files call is needed
+  const clean = realpathSync(mkdtempSync(join(tmpdir(), "clean-"))); run(["init", "-q", "-b", "main"], clean); writeFileSync(join(clean, "a"), "x"); run(["add", "-A"], clean);
+  let calls = 0; assert.deepEqual(await GU.listUntracked(async (args) => { calls++; return run([...GU.READ, ...args], clean); }), []); assert.equal(calls, 1);
+}
+// the panel's status: directories in, files out
+{
+  const parsed = GU.parseStatus("## main\0?? a/\0 M tracked.txt\0?? b.txt\0?? nested/\0");
+  assert.deepEqual(parsed.changes.map((f) => f.path), ["a/", "tracked.txt", "b.txt", "nested/"]);
+  const dirs = parsed.changes.filter((f) => f.status === "U" && GU.UNTRACKED_DIR(f.path)).map((f) => f.path);
+  assert.deepEqual(dirs, ["a/", "nested/"]);
+  const byDir = GU.untrackedInDirs(dirs, "a/1.txt\0a/sub/2.txt\0nested/\0");
+  assert.deepEqual(byDir.get("a/"), ["a/1.txt", "a/sub/2.txt"]);
+  GU.expandUntracked(parsed, byDir);
+  assert.deepEqual(parsed.changes.map((f) => f.path), ["a/1.txt", "a/sub/2.txt", "tracked.txt", "b.txt", "nested/"], "files replace the directory; a directory with nothing listed (nested repo) stays");
+  assert.ok(parsed.changes.filter((f) => f.status === "U").every((f) => f.fresh === true && f.group === "changes"));
+  const capped = GU.expandUntracked(GU.parseStatus("## m\0?? big/\0"), new Map([["big/", Array.from({ length: 50 }, (_, i) => `big/${i}`)]]), 10);
+  assert.equal(capped.changes.length, 10); assert.equal(capped.limited, true, "expansion respects the list limit");
+}
+console.log("fast untracked listing ok");

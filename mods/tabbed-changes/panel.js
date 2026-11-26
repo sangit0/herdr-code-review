@@ -131,21 +131,26 @@ export class Panel {
         if (this.key() !== context) return;
         if (top.code !== 0) { this.root = null; this.staged = []; this.changes = []; this.conflicts = []; this.branch = null; this.originBase=null; this.error = "Not a git repository"; return; }
         const root = top.stdout.trim(), git = (args) => readGit({root,on},args);
-        const status = await git(["status", "--porcelain=v1", "-z", "-b", "--no-renames", "--untracked-files=all"]);
+        const out = async (args) => { const r = await git(args); if (r.code !== 0) throw new Error(r.stderr); return r.stdout; };
+        const numstat = async (args) => G.parseNumstat(await out(["diff", ...args, "--numstat", "-z", "--no-renames"]));
+        // These reads do not depend on each other, so they run together: the slowest sets the time, not the sum.
+        // `--untracked-files=normal` lists an untracked directory as one entry (see the files inside it below): `all` walks the
+        // whole worktree, several seconds in a big monorepo.
+        const [status, head, cached, worktree, originBase] = await Promise.all([
+          git(["status", "--porcelain=v1", "-z", "-b", "--no-renames", "--untracked-files=normal"]),
+          git(["rev-parse", "--verify", "HEAD"]),
+          numstat(["--cached"]), numstat([]),
+          Promise.resolve().then(() => resolveOrigin(out, "origin")).catch(() => null), // No conventional origin base has been fetched yet.
+        ]);
         if (status.code !== 0) throw new Error(status.stderr);
-        const head = await git(["rev-parse", "--verify", "HEAD"]);
-        const numstat = async (args) => {
-          const r = await git(["diff", ...args, "--numstat", "-z", "--no-renames"]);
-          if (r.code !== 0) throw new Error(r.stderr);
-          return G.parseNumstat(r.stdout);
-        };
-        const parsed = G.parseStatus(status.stdout, await numstat(["--cached"]), await numstat([]));
-        if(parsed.branch && !parsed.branch.detached){
-          const target=await branchTarget(async args=>{const r=await git(args);if(r.code!==0)throw new Error(r.stderr);return r.stdout;},parsed.branch.name);
-          parsed.branch.upstream=target?.label??null;
-        }
-        let originBase=null;
-        try {originBase=await resolveOrigin(async args=>{const r=await git(args);if(r.code!==0)throw new Error(r.stderr);return r.stdout;},"origin");}catch { /* No conventional origin base has been fetched yet. */ }
+        const parsed = G.parseStatus(status.stdout, cached, worktree);
+        const dirs = parsed.changes.filter((f) => f.status === "U" && G.UNTRACKED_DIR(f.path)).map((f) => f.path);
+        const [target] = await Promise.all([
+          parsed.branch && !parsed.branch.detached ? branchTarget(out, parsed.branch.name) : null,
+          // The files inside untracked directories. If this fails the directories stay listed as they are.
+          dirs.length ? out(["ls-files", "--others", "--exclude-standard", "-z", "--", ...dirs]).then((text) => G.expandUntracked(parsed, G.untrackedInDirs(dirs, text))).catch(() => null) : null,
+        ]);
+        if (parsed.branch && !parsed.branch.detached) parsed.branch.upstream = target?.label ?? null;
         if (this.key() !== context || token !== this.loadToken) return;
         this.originBase=originBase;
         this.root = root; this.on = on; this.hasHead = head.code === 0;

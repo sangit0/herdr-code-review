@@ -174,7 +174,7 @@ export class DiffTab {
     const files = G.splitPatch(patch);
     const seen = new Set(files.map((f) => f.path)), merged = [];
     for (const f of files) { if (!f.lines.length) f.lines = [f.binary ? "Binary file changed" : "No text diff available"]; merged.push(f); }
-    const fresh = (await git(["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
+    const fresh = await G.listUntracked(git); // the fast listing: see git.js
     for (const path of fresh.slice(0, MAX_UNTRACKED)) {
       if (seen.has(path)) continue;
       const text = await readTextFile(`${root}/${path}`, { on: on ?? null }).catch(() => null);
